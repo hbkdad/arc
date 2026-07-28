@@ -1,0 +1,55 @@
+"""Shared pytest fixtures for the ACR test suite."""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterator, Iterator
+from pathlib import Path
+
+import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from acr.config import Settings, get_settings
+
+# Imported for side effects only: registers each domain's ORM tables on
+# Base.metadata before any fixture calls Base.metadata.create_all().
+from acr.core.tasks import models as _task_models  # noqa: F401
+from acr.db.base import Base, make_engine, make_session_factory
+from acr.telemetry import models as _telemetry_models  # noqa: F401
+
+
+@pytest.fixture
+def isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
+    """Point ACR at a fresh temp data dir so tests never touch a real ~/.acr or repo /data."""
+    monkeypatch.setenv("ACR_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ACR_LOG_FORMAT", "console")
+    get_settings.cache_clear()
+    yield tmp_path
+    get_settings.cache_clear()
+
+
+@pytest.fixture
+def settings(isolated_env: Path) -> Settings:
+    return get_settings()
+
+
+@pytest.fixture
+async def migrated_settings(settings: Settings) -> AsyncIterator[Settings]:
+    """`settings`, backed by a fresh SQLite file with all ORM tables created.
+
+    Bypasses Alembic for test speed — Alembic remains the single source of
+    truth for real deployments/migrations (see docs/ARCHITECTURE.md).
+    """
+    engine = make_engine(settings)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    await engine.dispose()
+    yield settings
+
+
+@pytest.fixture
+async def db_session(migrated_settings: Settings) -> AsyncIterator[AsyncSession]:
+    engine = make_engine(migrated_settings)
+    factory = make_session_factory(engine)
+    async with factory() as session:
+        yield session
+    await engine.dispose()

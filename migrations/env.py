@@ -13,6 +13,7 @@ from acr.config import get_settings
 from acr.core.tasks import models as _task_models  # noqa: F401
 from acr.db.base import Base
 from acr.memory import models as _memory_models  # noqa: F401
+from acr.skills import models as _skill_models  # noqa: F401
 from acr.telemetry import models as _telemetry_models  # noqa: F401
 
 # this is the Alembic Config object, which provides

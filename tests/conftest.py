@@ -15,7 +15,9 @@ from acr.config import Settings, get_settings
 from acr.core.tasks import models as _task_models  # noqa: F401
 from acr.db.base import Base, make_engine, make_session_factory
 from acr.memory import models as _memory_models  # noqa: F401
-from acr.memory.fts import create_fts
+from acr.memory.fts import create_fts as create_memory_fts
+from acr.skills import models as _skill_models  # noqa: F401
+from acr.skills.fts import create_fts as create_skill_fts
 from acr.telemetry import models as _telemetry_models  # noqa: F401
 
 
@@ -44,7 +46,8 @@ async def migrated_settings(settings: Settings) -> AsyncIterator[Settings]:
     engine = make_engine(settings)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        await create_fts(conn)
+        await create_memory_fts(conn)
+        await create_skill_fts(conn)
     await engine.dispose()
     yield settings
 

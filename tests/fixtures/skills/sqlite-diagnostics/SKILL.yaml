@@ -1,0 +1,23 @@
+id: sqlite-diagnostics
+name: SQLite Diagnostics
+version: "1.0.0"
+description: Diagnose common SQLite database integrity and migration issues.
+task_classes:
+  - database-diagnostics
+  - sqlite-migration
+inputs:
+  database_path: string
+outputs:
+  report: string
+dependencies: []
+permissions:
+  - database.read
+tools:
+  - shell
+models: []
+token_estimate: 400
+applicability: Use when a task involves inspecting or repairing a SQLite database.
+contraindications: Do not use for non-SQLite databases.
+verification: Report must cite the specific PRAGMA or query used.
+origin: manual
+author: test-fixture

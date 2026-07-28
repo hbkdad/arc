@@ -8,6 +8,7 @@ the phases that give them something real to do.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import typer
 
@@ -21,11 +22,17 @@ from acr.db.base import session_scope
 from acr.doctor import CheckStatus, run_checks
 from acr.logging import configure_logging, get_logger
 from acr.providers.mock import MockProvider
+from acr.skills.models import SkillRecord, SkillStatus
+from acr.skills.registry import list_skills, register, set_status
+from acr.skills.routing import RoutedSkill, route
+from acr.skills.search import SkillSearchResult, search
 from acr.telemetry.recorder import TelemetryRecorder
 
 app = typer.Typer(name="acr", help="ACR — Adaptive Cognitive Runtime", no_args_is_help=True)
 context_app = typer.Typer(name="context", help="Context compiler operations.")
+skills_app = typer.Typer(name="skills", help="Skill registry operations.")
 app.add_typer(context_app)
+app.add_typer(skills_app)
 
 _STATUS_SYMBOL = {
     CheckStatus.OK: "[OK]  ",
@@ -112,6 +119,91 @@ def context_compile(
             f"  [{item.source.value}] {item.id[:8]} relevance={item.relevance:.2f} "
             f"tokens={item.token_cost} — {item.selection_reason}"
         )
+
+
+@skills_app.command("register")
+def skills_register(
+    path: Path = typer.Argument(
+        ..., help="Path to a skill package directory (contains SKILL.yaml)."
+    ),
+) -> None:
+    """Register (or re-register) a skill package from disk."""
+    settings = get_settings()
+
+    async def _register() -> SkillRecord:
+        async with session_scope(settings) as session:
+            record = await register(session, path)
+            await session.commit()
+            return record
+
+    record = asyncio.run(_register())
+    typer.echo(f"{record.id} v{record.version} -> {record.status.value}")
+
+
+@skills_app.command("list")
+def skills_list(
+    status: SkillStatus | None = typer.Option(None, "--status", help="Filter by status."),
+) -> None:
+    """List registered skills."""
+    settings = get_settings()
+
+    async def _list() -> list[SkillRecord]:
+        async with session_scope(settings) as session:
+            return await list_skills(session, status=status)
+
+    for record in asyncio.run(_list()):
+        typer.echo(f"{record.id}\tv{record.version}\t{record.status.value}\t{record.name}")
+
+
+@skills_app.command("search")
+def skills_search(
+    query: str = typer.Argument(..., help="Keyword search over skill name/description."),
+) -> None:
+    """Search the skill registry."""
+    settings = get_settings()
+
+    async def _search() -> list[SkillSearchResult]:
+        async with session_scope(settings) as session:
+            return await search(session, query)
+
+    for result in asyncio.run(_search()):
+        typer.echo(f"{result.record.id}\trank={result.rank:.2f}\t{result.record.description}")
+
+
+@skills_app.command("activate")
+def skills_activate(
+    skill_id: str = typer.Argument(..., help="Skill id to transition."),
+    status: SkillStatus = typer.Option(
+        SkillStatus.ACTIVE, "--status", help="Target status (manual activation, master §696)."
+    ),
+) -> None:
+    """Manually transition a skill's lifecycle status."""
+    settings = get_settings()
+
+    async def _set_status() -> SkillRecord:
+        async with session_scope(settings) as session:
+            record = await set_status(session, skill_id, status)
+            await session.commit()
+            return record
+
+    record = asyncio.run(_set_status())
+    typer.echo(f"{record.id} -> {record.status.value}")
+
+
+@skills_app.command("route")
+def skills_route(
+    objective: str = typer.Argument(..., help="Task description to route to active skills."),
+    task_class: str | None = typer.Option(None, "--task-class"),
+) -> None:
+    """Route a task to the smallest useful set of active skills."""
+    settings = get_settings()
+
+    async def _route() -> list[RoutedSkill]:
+        async with session_scope(settings) as session:
+            return await route(session, objective, task_class=task_class)
+
+    for routed in asyncio.run(_route()):
+        typer.echo(f"{routed.record.id}\t{routed.selection_reason}")
 
 
 if __name__ == "__main__":

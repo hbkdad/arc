@@ -13,87 +13,18 @@ infrastructure ahead of evidence it's needed (master principle #23).
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from acr.core.fts_query import build_match_query
 from acr.core.tokens import estimate_tokens
 from acr.memory.models import MemoryRecord, MemoryScope, MemoryStatus, MemoryType, utcnow
 
 __all__ = ["RetrievedMemory", "estimate_tokens", "retrieve"]
 
 _ACTIVE_STATUSES = (MemoryStatus.CANDIDATE, MemoryStatus.CONFIRMED)
-_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_]+")
-
-# Common English function words. An OR-joined query treats every surviving
-# token as a match signal, so leaving these in would make nearly any query
-# match nearly any content.
-_STOPWORDS = frozenset(
-    [
-        "a",
-        "an",
-        "the",
-        "this",
-        "that",
-        "these",
-        "those",
-        "is",
-        "are",
-        "was",
-        "were",
-        "be",
-        "been",
-        "being",
-        "in",
-        "on",
-        "at",
-        "to",
-        "of",
-        "and",
-        "or",
-        "for",
-        "with",
-        "without",
-        "it",
-        "its",
-        "as",
-        "by",
-        "from",
-        "but",
-        "not",
-        "no",
-        "nor",
-        "i",
-        "you",
-        "he",
-        "she",
-        "we",
-        "they",
-        "them",
-        "their",
-        "his",
-        "her",
-        "our",
-        "your",
-        "do",
-        "does",
-        "did",
-        "have",
-        "has",
-        "had",
-        "will",
-        "would",
-        "can",
-        "could",
-        "should",
-        "shall",
-        "may",
-        "might",
-        "must",
-    ]
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,22 +35,9 @@ class RetrievedMemory:
     selection_reason: str
 
 
-def _build_match_query(query: str) -> str:
-    """Build a safe FTS5 MATCH query: OR-joined, quoted tokens.
-
-    A bare-word MATCH query ANDs every term by default, so passing a full
-    natural-language task objective straight through would only match
-    content containing *every single word* of it. Quoting each token also
-    escapes FTS5 query-syntax metacharacters a raw sentence could otherwise
-    trip over (e.g. a colon or leading hyphen).
-    """
-    tokens = [t for t in _TOKEN_PATTERN.findall(query) if t.lower() not in _STOPWORDS]
-    return " OR ".join(f'"{token}"' for token in tokens)
-
-
 async def _fts_ranks(session: AsyncSession, query: str, limit: int) -> dict[str, float]:
     """Full-text search via SQLite FTS5. Returns {memory_id: bm25_rank} (lower = more relevant)."""
-    match_query = _build_match_query(query)
+    match_query = build_match_query(query)
     if not match_query:
         return {}
     rows = (

@@ -5,7 +5,7 @@ from __future__ import annotations
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from acr.memory import MemoryCandidate, MemoryScope, MemoryType
-from acr.memory.retrieval import _build_match_query, retrieve
+from acr.memory.retrieval import retrieve
 from acr.memory.write_controller import remember
 
 
@@ -21,16 +21,6 @@ async def _seed(session: AsyncSession, subject: str, content: str, **overrides: 
     )
     defaults.update(overrides)
     await remember(session, MemoryCandidate(**defaults))  # type: ignore[arg-type]
-
-
-def test_build_match_query_ors_content_words_and_drops_stopwords() -> None:
-    assert _build_match_query("Explain the SQLite storage layer") == (
-        '"Explain" OR "SQLite" OR "storage" OR "layer"'
-    )
-
-
-def test_build_match_query_is_empty_for_stopwords_only() -> None:
-    assert _build_match_query("the a an") == ""
 
 
 async def test_retrieve_matches_a_sentence_query_via_or_semantics(

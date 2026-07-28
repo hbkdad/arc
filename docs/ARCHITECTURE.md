@@ -12,10 +12,10 @@ A modular monorepo: `apps/` (api, dashboard, website, desktop), `packages/`
 `tools/`, `learning/`, `telemetry/`, `security/`), plus `benchmarks/`,
 `migrations/`, `tests/`, `scripts/`, `examples/`, `docs/`.
 
-## Current shape (Phase 0 Foundation + Phase 1 Execution + Phase 2 Memory + Phase 3 Context)
+## Current shape (Phase 0 Foundation + Phase 1 Execution + Phase 2 Memory + Phase 3 Context + Phase 4 Skills)
 
-Only the Python CLI foundation, task engine, memory system, and context
-compiler exist. See
+Only the Python CLI foundation, task engine, memory system, context compiler,
+and skill system exist. See
 [`docs/adr/0001-src-layout-single-package.md`](adr/0001-src-layout-single-package.md)
 for why this is one `src/acr/` package rather than the full multi-directory
 tree, and when to split it.
@@ -30,7 +30,8 @@ acrtest/
 │   └── versions/
 │       ├── 0dd629888bfd_baseline.py
 │       ├── 87b619c4e7ac_task_engine_and_telemetry_tables.py
-│       └── 6c384104b66a_memory_records_and_fts5.py
+│       ├── 6c384104b66a_memory_records_and_fts5.py
+│       └── 83b4d32aa8f2_skills_registry_and_fts5.py
 ├── src/acr/
 │   ├── __init__.py        # __version__
 │   ├── config.py          # Settings (pydantic-settings, ACR_* env / .env)
@@ -39,9 +40,10 @@ acrtest/
 │   │   ├── __init__.py
 │   │   └── base.py        # async SQLAlchemy engine/session, Base
 │   ├── doctor.py          # health checks used by `acr doctor`
-│   ├── cli.py             # Typer app: `acr version`, `acr doctor`, `acr run`
+│   ├── cli.py             # Typer app: version/doctor/run/context/skills
 │   ├── core/
-│   │   ├── tokens.py              # shared estimate_tokens() — memory + context both use this
+│   │   ├── tokens.py              # shared estimate_tokens()
+│   │   ├── fts_query.py           # shared FTS5 MATCH query builder (OR + stopwords)
 │   │   ├── tasks/models.py       # Task, TaskRun, Step, TaskStatus + lifecycle rules
 │   │   └── execution/engine.py   # run_task(): drives a Task through a provider
 │   ├── providers/
@@ -57,11 +59,19 @@ acrtest/
 │   │   ├── retrieval.py       # hybrid retrieval: FTS + metadata + ranking + token budget
 │   │   ├── temporal.py        # current() / at() / history()
 │   │   └── write_controller.py  # evaluate()/apply()/remember() decision policy
-│   └── context/
-│       ├── models.py         # ContextItem, ContextBundle
-│       ├── compiler.py        # compile_context(): discover->...->assemble pipeline
-│       └── attribution.py     # record_attribution(): feeds usage back into memory utility
+│   ├── context/
+│   │   ├── models.py         # ContextItem, ContextBundle
+│   │   ├── compiler.py        # compile_context(): discover->...->assemble pipeline
+│   │   └── attribution.py     # record_attribution(): feeds usage back into memory utility
+│   └── skills/
+│       ├── format.py         # SKILL.yaml manifest schema + loader
+│       ├── models.py          # SkillRecord + SkillStatus lifecycle rules
+│       ├── fts.py             # skills_fts virtual table + sync triggers
+│       ├── registry.py        # register()/get()/list_skills()/set_status()
+│       ├── search.py          # FTS keyword search over the registry
+│       └── routing.py         # route(): the master §685-696 8-step process
 ├── tests/
+│   ├── fixtures/skills/       # sqlite-diagnostics (valid), broken-skill (invalid manifest)
 │   ├── conftest.py         # isolated_env / settings / migrated_settings / db_session
 │   ├── test_config.py
 │   ├── test_doctor.py
@@ -70,12 +80,17 @@ acrtest/
 │   ├── test_providers.py
 │   ├── test_execution_engine.py
 │   ├── test_core_tokens.py
+│   ├── test_core_fts_query.py
 │   ├── test_memory_models.py
 │   ├── test_memory_write_controller.py
 │   ├── test_memory_temporal.py
 │   ├── test_memory_retrieval.py
 │   ├── test_context_compiler.py
-│   └── test_context_attribution.py
+│   ├── test_context_attribution.py
+│   ├── test_skill_format.py
+│   ├── test_skill_registry.py
+│   ├── test_skill_search.py
+│   └── test_skill_routing.py
 └── docs/
     ├── ARCHITECTURE.md     # this file
     └── adr/0001-src-layout-single-package.md
@@ -150,9 +165,10 @@ retrieval", not semantic, and adding an embeddings model now would be
 infrastructure ahead of evidence it's needed.
 
 FTS5 `MATCH` ANDs bare terms by default, so `retrieve()` builds an OR-joined,
-quoted, stopword-filtered query (`_build_match_query` in `retrieval.py`) —
-passing a full natural-language task objective straight through as an
-implicit AND would only match content containing *every single word* of it.
+quoted, stopword-filtered query (`acr.core.fts_query.build_match_query`,
+shared with skill search — see Phase 4 below) — passing a full
+natural-language task objective straight through as an implicit AND would
+only match content containing *every single word* of it.
 
 ## Context compiler (Phase 3)
 
@@ -172,7 +188,39 @@ asks for: given which bundle item IDs a task actually used, it increments
 each source record's `successful_uses`/`failed_uses` and recomputes
 `utility_score` — which is exactly what `retrieval.retrieve()`'s ranking
 already reads. Items that were offered but not used are left untouched
-(§464-465: not used ≠ useless).
+(§464-465: not used ≠ useless). Skills aren't wired into the compiler yet
+(the bundle has no skill items to attribute), so `SkillRecord.successful_uses`/
+`failed_uses` (Phase 4 below) aren't updated by attribution today either.
+
+## Skill system (Phase 4)
+
+A skill package is a directory containing `SKILL.yaml` (required — parsed by
+`acr.skills.format.load_manifest` into a validated `SkillManifest`, master
+§655-676's exact required field set) and optionally `instructions.md`. The
+`skills` table is a metadata-only registry populated by
+`registry.register()` — a query never re-reads the package's files off disk
+(master §683: "discoverable without loading every skill into context").
+Re-registering an already-registered skill (same manifest `id`) updates its
+metadata but preserves `status`/`reliability`/use counters — activation
+state is earned, not reset by re-reading a file.
+
+Lifecycle (master §679-682) is validated the same way `Task`'s is (Phase 1):
+`experimental -> {quarantined, active}`, `quarantined -> {active, retired}`,
+`active -> {deprecated, quarantined}`, `deprecated -> {retired, active}`,
+`retired` terminal. Only `active` skills are ever routed to.
+
+`routing.route()` implements the master §685-696 8-step process: classify
+(caller-supplied `task_class`, no classifier model yet) -> retrieve
+candidates (**every** active skill — keyword search supplies a relevance
+signal but never gates candidacy, so a `task_class` match surfaces a skill
+even with zero keyword overlap with the task description) -> estimate
+applicability (max of keyword relevance and an exact task_class match) ->
+estimate expected quality gain (applicability weighted by `reliability`,
+which doubles as step 6's "check prior performance" — it *is* the
+successful/total ratio a skill has earned) -> estimate token overhead
+(`token_estimate`) -> remove overlapping skills (drop a candidate whose
+`task_classes` are a subset of an already-kept, higher-scoring candidate's)
+-> return the top `max_skills`.
 
 ## Commands available today
 
@@ -181,6 +229,11 @@ uv run acr doctor              # Python version, data dir, DB, mock + Ollama pro
 uv run acr version
 uv run acr run "objective"     # create + execute a Task end-to-end via the mock provider
 uv run acr context compile "objective" --budget 2000  # compile + print a ContextBundle
+uv run acr skills register <path>        # parse SKILL.yaml, add/update the registry
+uv run acr skills list [--status active]
+uv run acr skills search "query"
+uv run acr skills activate <id> --status active   # manual lifecycle transition
+uv run acr skills route "task description" [--task-class X]
 uv run alembic upgrade head
 uv run pytest
 uv run ruff check .
@@ -194,5 +247,5 @@ to write memory from outside a test, e.g. experience distillation (Phase 8).
 
 ## Next milestone
 
-Phase 4 — Skills: skill format, registry, search, routing, manual activation
-(master §645-696).
+Phase 5 — Evaluation: evaluators, benchmarks, regression detection, waste
+analysis (master §1026-1090).

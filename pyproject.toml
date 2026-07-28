@@ -2,6 +2,8 @@
 name = "acr"
 version = "0.1.0"
 description = "ACR — Adaptive Cognitive Runtime: a local-first, model-independent AI orchestration and cognitive runtime."
+readme = "README.md"
+license = "MIT"
 requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.18.5",

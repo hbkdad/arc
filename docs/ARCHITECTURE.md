@@ -12,19 +12,23 @@ A modular monorepo: `apps/` (api, dashboard, website, desktop), `packages/`
 `tools/`, `learning/`, `telemetry/`, `security/`), plus `benchmarks/`,
 `migrations/`, `tests/`, `scripts/`, `examples/`, `docs/`.
 
-## Current shape (Phase 0 Foundation + Phase 1 Execution + Phase 2 Memory + Phase 3 Context + Phase 4 Skills + Phase 5 Evaluation + Phase 6 Routing + Phase 7 Security + Phase 8 Learning + Phase 9 Skill Evolution + Phase 10 Agents + Phase 11 Dashboard + Phase 12 Visualization + Phase 13 Integrations)
+## Current shape (Phase 0 Foundation + Phase 1 Execution + Phase 2 Memory + Phase 3 Context + Phase 4 Skills + Phase 5 Evaluation + Phase 6 Routing + Phase 7 Security + Phase 8 Learning + Phase 9 Skill Evolution + Phase 10 Agents + Phase 11 Dashboard + Phase 12 Visualization + Phase 13 Integrations + Phase 14 Public Launch baseline)
 
 Only the Python CLI foundation, task engine, memory system, context compiler,
 skill system, evaluation system, model/tool routing, security layer,
 learning system, skill validation/evolution, agents, the operational
-dashboard, a real-telemetry visualization, an MCP server, and web-fetch/
-browser/GitHub-search tools exist. See
+dashboard, a real-telemetry visualization, an MCP server, web-fetch/
+browser/GitHub-search tools, and baseline OSS repo hygiene exist. See
 [`docs/adr/0001-src-layout-single-package.md`](adr/0001-src-layout-single-package.md)
 for why this is one `src/acr/` package rather than the full multi-directory
 tree, and when to split it.
 
 ```
 acrtest/
+├── README.md
+├── LICENSE                # MIT
+├── SECURITY.md            # GitHub private vulnerability reporting
+├── CONTRIBUTING.md
 ├── pyproject.toml         # uv project: deps, ruff, pyright, pytest config
 ├── uv.lock
 ├── alembic.ini
@@ -721,6 +725,35 @@ percent-encoded (`urllib.parse.quote`) before being embedded in the
 endpoint, and any future hang is bounded rather than blocking the caller
 forever.
 
+## Public launch baseline (Phase 14)
+
+Master §1714-1720 lists website, docs, GitHub, security page, downloads,
+and support link. The repo (`hbkdad/arc`) is already public on GitHub, so
+this phase is baseline OSS hygiene for a repo that's already visible, not
+a real product launch — explicit user decision, not a marketing push. No
+separate marketing site was built; the README is the de facto public
+entry point for now (§1714's "website" bullet, deliberately scoped down
+the same way Phase 12 scoped down "3D" — documented, not silently
+reinterpreted).
+
+- `LICENSE` — MIT, per explicit user choice.
+- `SECURITY.md` — points to GitHub's private vulnerability reporting
+  (Settings → Security → "Report a vulnerability"), which was OFF for
+  this repo and is now explicitly enabled (`gh api --method PUT
+  repos/hbkdad/arc/private-vulnerability-reporting`, per explicit user
+  confirmation before flipping a real repo setting).
+- `CONTRIBUTING.md` — dev setup, the quality gate, and a pointer to
+  `ACR_MASTER_SYSTEM_PROMPT.md`/this file as the actual source of truth
+  for how the project is built, since that's genuinely how it works here.
+- `README.md` — refreshed: the stale hardcoded "Status: Phase 0" line is
+  gone (it could only ever drift out of sync with this file); replaced
+  with a real "what's here" summary and links to `LICENSE`/`SECURITY.md`/
+  GitHub Issues. `pyproject.toml` gained `license = "MIT"` and `readme =
+  "README.md"`.
+- "Downloads" (§1714) isn't addressed yet — no PyPI package exists, and
+  publishing one is a distinct action needing its own credentials/account,
+  not assumed here.
+
 ## Commands available today
 
 ```bash
@@ -774,16 +807,14 @@ plus `acr.learning.distillation` as a real caller) — no
 
 ## Next milestone
 
-Phase 13 is functionally complete: MCP server exposure, web-fetch, real
-browser automation, and read-only GitHub search are all done (above). The
-generic MCP server is the de facto Claude Code/Codex integration point
-(either can connect to `acr mcp serve` as any MCP client would) — no
-bespoke per-client integration built, since their exact config formats
-weren't verified and shouldn't be guessed at. Desktop app (a Tauri
-packaging effort — see the master's Tauri note around §1385) was
-deliberately deferred per explicit user decision — large enough to
-deserve its own scoping conversation whenever it's picked up, not an
-assumed default.
+Phase 13 is functionally complete (MCP server, web-fetch, real browser
+automation, read-only GitHub search — see "Integrations" above); desktop
+app (Tauri) deliberately deferred per explicit user decision, large enough
+to deserve its own scoping conversation whenever it's picked up. Phase 14
+baseline OSS hygiene is done (see "Public launch baseline" above) — no
+PyPI package/"downloads" yet, that needs its own credentials/account.
 
-Next: Phase 14 — Public Launch (website, docs, GitHub repo presentation,
-downloads, support link — master §1714-1720), per explicit user decision.
+Next: Phase 15 — Controlled Self-Improvement: experiments, strategy
+optimization, skill evolution (builds on Phase 9's evolution pipeline),
+routing optimization, autonomous proposals (master §1721-1727). This is
+the last phase in the master spec's 15-phase list.

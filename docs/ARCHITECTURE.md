@@ -97,6 +97,7 @@ acrtest/
 │   │   ├── registry.py        # in-memory ToolRegistry (tools are code, not user data)
 │   │   ├── default_tools.py    # real tools: memory_search, skill_search, web_fetch
 │   │   ├── web_fetch.py        # http(s) GET + stdlib HTML text extraction, injection-scanned
+│   │   ├── github_search.py    # read-only issue/PR search via the already-authenticated gh CLI
 │   │   ├── exposure.py         # expose_tools(): task-specific subset, min-relevance gated
 │   │   └── invocation.py       # invoke_tool(): permission + safe-mode check, audit-logged
 │   ├── security/
@@ -173,7 +174,8 @@ acrtest/
 │   ├── test_agents_topology.py
 │   ├── test_dashboard.py
 │   ├── test_mcp_server.py
-│   └── test_tools_web_fetch.py
+│   ├── test_tools_web_fetch.py
+│   └── test_tools_github_search.py
 └── docs/
     ├── ARCHITECTURE.md     # this file
     └── adr/0001-src-layout-single-package.md
@@ -660,6 +662,32 @@ keep a single shared *content* word (e.g. two tools both named
 `*_search`) from crossing the threshold on its own — the exact scenario
 the module's own docstring already described as the thing to prevent.
 
+### GitHub search tool
+
+`acr.tools.github_search` is master §1707-1713's "GitHub" integration,
+scoped to read-only search (per explicit user decision — write actions
+like creating issues/comments are a distinct "publish/post" decision that
+needs per-action confirmation, not a blanket grant). It shells out to the
+`gh` CLI, already authenticated on this machine — no token is ever read,
+stored, or passed through ACR's own code; `gh` owns its own credential
+storage entirely, so nothing GitHub-shaped touches ACR's memory, logs, or
+telemetry. `gh api "search/issues?q=..."` covers both issues and PRs in
+one call. Registered the same way as every other tool
+(`permissions=["network.read"]`, `READ_ONLY`) — `acr tools github-search
+"<query>"` on the CLI, or `github_search` over MCP. Issue/PR titles are
+untrusted external content (real-world testing turned up a spam issue
+titled to look like a rate-limit error message), so each result is run
+through `scan_for_injection()` the same way `web_fetch` scans fetched
+pages.
+
+`_run_gh_api()` has its own timeout (`GhCliTimeoutError`, 15s) and a clear
+`GhCliNotFoundError` if `gh` isn't on `PATH` — a real gap an early manual
+smoke test found: an unencoded query string with a space in it caused `gh
+api` to hang rather than fail cleanly, so the query is now
+percent-encoded (`urllib.parse.quote`) before being embedded in the
+endpoint, and any future hang is bounded rather than blocking the caller
+forever.
+
 ## Commands available today
 
 ```bash
@@ -682,6 +710,7 @@ uv run acr tools list
 uv run acr tools expose "task description" [--max-tools N]
 uv run acr tools invoke <name> --query "..." [--limit N]   # permission + safe-mode checked
 uv run acr tools fetch <url> [--max-chars N]                # http(s) GET + text extraction
+uv run acr tools github-search "<query>" [--limit N]         # read-only, via the gh CLI
 uv run acr safe-mode                       # show whether ACR_SAFE_MODE is on
 uv run acr security scan "text"            # prompt-injection heuristic scanner
 uv run acr security audit [--limit N]      # recent audit events
@@ -711,14 +740,17 @@ plus `acr.learning.distillation` as a real caller) — no
 
 ## Next milestone
 
-Phase 13 continued — Integrations: MCP server exposure and the web-fetch
-tool are done (above); the generic MCP server is the de facto Claude
-Code/Codex integration point (either can connect to `acr mcp serve` as any
-MCP client would) — no bespoke per-client integration built, since their
-exact config formats weren't verified and shouldn't be guessed at.
-Remaining sub-slices: GitHub (needs a token from the user — explicit
-sign-off required before touching credentials), real interactive browser
-automation (Playwright — needs a ~100-300MB binary download, explicit
-sign-off required when picked up), and desktop app (a Tauri packaging
-effort — see the master's Tauri note around §1385 — large enough it
-deserves its own scoping conversation, not an assumed default).
+Phase 13 continued — Integrations: MCP server exposure, web-fetch, and
+read-only GitHub search are done (above); the generic MCP server is the de
+facto Claude Code/Codex integration point (either can connect to `acr mcp
+serve` as any MCP client would) — no bespoke per-client integration built,
+since their exact config formats weren't verified and shouldn't be guessed
+at. Remaining sub-slices: real interactive browser automation (Playwright
+— dependency can be added freely, but the actual ~100-300MB Chromium
+binary download needs explicit sign-off at the moment it would happen,
+per the user's standing answer), and desktop app (a Tauri packaging
+effort — see the master's Tauri note around §1385 — deliberately deferred
+per explicit user decision; large enough to deserve its own scoping
+conversation later). After Phase 13 wraps, next is Phase 14 — Public
+Launch (website, docs, GitHub repo presentation, downloads, support link
+— master §1714-1720), per explicit user decision.

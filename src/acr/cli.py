@@ -70,6 +70,7 @@ from acr.telemetry.models import TelemetryEvent
 from acr.telemetry.recorder import TelemetryRecorder
 from acr.tools.default_tools import build_default_registry
 from acr.tools.exposure import expose_tools
+from acr.tools.github_search import GhCliError, GhCliNotFoundError, GhCliTimeoutError
 from acr.tools.invocation import invoke_tool
 from acr.tools.models import ToolSpec
 from acr.tools.registry import ToolNotFoundError
@@ -507,6 +508,54 @@ def tools_fetch(
     truncated_note = " [truncated]" if result["truncated"] else ""
     typer.echo(f"{result['url']} ({result['status_code']}){truncated_note}")
     typer.echo(result["text"])
+
+
+@tools_app.command("github-search")
+def tools_github_search(
+    query: str = typer.Argument(..., help='GitHub search query, e.g. "repo:owner/name is:pr".'),
+    limit: int = typer.Option(5, "--limit"),
+) -> None:
+    """Search GitHub issues/PRs, read-only, via the already-authenticated gh CLI."""
+    settings = get_settings()
+    registry = build_default_registry()
+
+    async def _search() -> object:
+        async with session_scope(settings) as session:
+            result = await invoke_tool(
+                session,
+                registry,
+                "github_search",
+                grants=_CLI_OPERATOR_GRANTS,
+                telemetry=TelemetryRecorder(),
+                safe_mode=settings.safe_mode,
+                query=query,
+                limit=limit,
+            )
+            await session.commit()
+            return result
+
+    try:
+        result = asyncio.run(_search())
+    except GhCliNotFoundError as exc:
+        typer.echo(f"gh not available: {exc}")
+        raise typer.Exit(code=1) from exc
+    except (GhCliError, GhCliTimeoutError) as exc:
+        typer.echo(f"gh api failed: {exc}")
+        raise typer.Exit(code=1) from exc
+    except (PermissionDeniedError, SafeModeError) as exc:
+        typer.echo(f"denied: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    assert isinstance(result, list)
+    if not result:
+        typer.echo("no results")
+        return
+    for item in result:
+        flag = " [SUSPICIOUS]" if item["suspicious"] else ""
+        kind = "PR" if item["is_pull_request"] else "issue"
+        typer.echo(f"{item['repository']}#{item['number']} ({kind}, {item['state']}){flag}")
+        typer.echo(f"  {item['title']}")
+        typer.echo(f"  {item['url']}")
 
 
 @app.command("safe-mode")

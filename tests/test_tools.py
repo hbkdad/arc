@@ -34,10 +34,10 @@ def test_registry_raises_for_unknown_tool() -> None:
         registry.get("does-not-exist")
 
 
-def test_default_registry_has_memory_skill_and_web_search() -> None:
+def test_default_registry_has_memory_skill_web_and_github_search() -> None:
     registry = build_default_registry()
     names = {tool.name for tool in registry.list_tools()}
-    assert names == {"memory_search", "skill_search", "web_fetch"}
+    assert names == {"memory_search", "skill_search", "web_fetch", "github_search"}
     assert all(
         tool.side_effect_level is SideEffectLevel.READ_ONLY for tool in registry.list_tools()
     )

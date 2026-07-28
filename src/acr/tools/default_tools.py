@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from acr.memory.retrieval import retrieve
 from acr.skills.search import search as skill_search
+from acr.tools.github_search import GITHUB_SEARCH
 from acr.tools.models import SideEffectLevel, ToolSpec
 from acr.tools.registry import ToolRegistry
 from acr.tools.web_fetch import WEB_FETCH
@@ -66,4 +67,5 @@ def build_default_registry() -> ToolRegistry:
     registry.register(MEMORY_SEARCH)
     registry.register(SKILL_SEARCH)
     registry.register(WEB_FETCH)
+    registry.register(GITHUB_SEARCH)
     return registry

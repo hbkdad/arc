@@ -187,6 +187,49 @@ def test_tools_fetch_rejects_a_non_http_url(migrated_settings: Settings) -> None
     assert "invalid url" in result.stdout
 
 
+def test_tools_github_search_prints_parsed_results(
+    migrated_settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from acr.tools import github_search as github_search_module
+
+    async def _fake_run_gh_api(endpoint: str) -> dict:
+        return {
+            "items": [
+                {
+                    "repository_url": "https://api.github.com/repos/hbkdad/arc",
+                    "number": 7,
+                    "title": "example issue",
+                    "state": "open",
+                    "html_url": "https://github.com/hbkdad/arc/issues/7",
+                    "comments": 0,
+                    "created_at": "2026-01-01T00:00:00Z",
+                }
+            ]
+        }
+
+    monkeypatch.setattr(github_search_module, "_run_gh_api", _fake_run_gh_api)
+
+    result = runner.invoke(app, ["tools", "github-search", "repo:hbkdad/arc"])
+    assert result.exit_code == 0
+    assert "hbkdad/arc#7" in result.stdout
+    assert "example issue" in result.stdout
+
+
+def test_tools_github_search_reports_missing_gh(
+    migrated_settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+
+    async def _raise_not_found(*args: object, **kwargs: object) -> None:
+        raise FileNotFoundError
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _raise_not_found)
+
+    result = runner.invoke(app, ["tools", "github-search", "repo:hbkdad/arc"])
+    assert result.exit_code == 1
+    assert "gh not available" in result.stdout
+
+
 def test_safe_mode_status_reports_off_by_default(migrated_settings: Settings) -> None:
     result = runner.invoke(app, ["safe-mode"])
     assert result.exit_code == 0

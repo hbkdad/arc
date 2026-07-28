@@ -37,6 +37,7 @@ from acr.evaluation.waste_analyzer import (
     analyze_context_utilization,
     find_duplicate_memories,
 )
+from acr.integrations.mcp_server import create_mcp_server
 from acr.learning.distillation import DistillationResult, TaskNotFoundError, distill_and_remember
 from acr.learning.promotion import PromotionReport, promote_candidates
 from acr.learning.skill_generation import (
@@ -84,6 +85,7 @@ security_app = typer.Typer(name="security", help="Security: audit log, injection
 learn_app = typer.Typer(name="learn", help="Experience distillation, promotion, skill generation.")
 agents_app = typer.Typer(name="agents", help="Agent planning, spawning, review, topology history.")
 dashboard_app = typer.Typer(name="dashboard", help="Operational dashboard.")
+mcp_app = typer.Typer(name="mcp", help="MCP server exposure.")
 app.add_typer(context_app)
 app.add_typer(skills_app)
 app.add_typer(benchmark_app)
@@ -94,6 +96,7 @@ app.add_typer(tools_app)
 app.add_typer(security_app)
 app.add_typer(agents_app)
 app.add_typer(dashboard_app)
+app.add_typer(mcp_app)
 
 # Every registered benchmark suite: name -> (seed, build_cases). Only one
 # exists today (master principle #23: no feature expansion without
@@ -843,6 +846,19 @@ def dashboard_serve(
 
     settings = get_settings()
     uvicorn.run(create_dashboard_app(settings), host=host, port=port)
+
+
+@mcp_app.command("serve")
+def mcp_serve(
+    transport: str = typer.Option("stdio", "--transport", help="stdio, sse, or streamable-http."),
+    host: str = typer.Option("127.0.0.1", "--host", help="Ignored for stdio."),
+    port: int = typer.Option(8767, "--port", help="Ignored for stdio."),
+) -> None:
+    """Serve ACR's memory/skill search and task execution over MCP."""
+    settings = get_settings()
+    server = create_mcp_server(settings)
+    kwargs = {} if transport == "stdio" else {"host": host, "port": port}
+    server.run(transport=transport, **kwargs)  # type: ignore[arg-type]
 
 
 if __name__ == "__main__":

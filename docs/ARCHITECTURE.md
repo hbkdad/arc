@@ -12,12 +12,12 @@ A modular monorepo: `apps/` (api, dashboard, website, desktop), `packages/`
 `tools/`, `learning/`, `telemetry/`, `security/`), plus `benchmarks/`,
 `migrations/`, `tests/`, `scripts/`, `examples/`, `docs/`.
 
-## Current shape (Phase 0 Foundation + Phase 1 Execution + Phase 2 Memory + Phase 3 Context + Phase 4 Skills + Phase 5 Evaluation + Phase 6 Routing + Phase 7 Security + Phase 8 Learning + Phase 9 Skill Evolution + Phase 10 Agents + Phase 11 Dashboard + Phase 12 Visualization)
+## Current shape (Phase 0 Foundation + Phase 1 Execution + Phase 2 Memory + Phase 3 Context + Phase 4 Skills + Phase 5 Evaluation + Phase 6 Routing + Phase 7 Security + Phase 8 Learning + Phase 9 Skill Evolution + Phase 10 Agents + Phase 11 Dashboard + Phase 12 Visualization + Phase 13 Integrations (MCP, in progress))
 
 Only the Python CLI foundation, task engine, memory system, context compiler,
 skill system, evaluation system, model/tool routing, security layer,
 learning system, skill validation/evolution, agents, the operational
-dashboard, and a real-telemetry visualization exist. See
+dashboard, a real-telemetry visualization, and an MCP server exist. See
 [`docs/adr/0001-src-layout-single-package.md`](adr/0001-src-layout-single-package.md)
 for why this is one `src/acr/` package rather than the full multi-directory
 tree, and when to split it.
@@ -116,12 +116,14 @@ acrtest/
 │   │   ├── planner.py          # plan_agent(): real skill routing + tool exposure for a spec
 │   │   ├── critic.py           # review_agent_task(): reuses Phase 5's evaluation panel
 │   │   └── topology.py         # AgentTopologyRecord, record_topology()/recommend_topology()
-│   └── dashboard/
-│       ├── queries.py          # read-only SELECTs backing every dashboard/visualization view
-│       ├── app.py              # create_app(): FastAPI + Jinja2, one route per operational view
-│       ├── templates/          # base.html + one template per view, plain tables, no JS framework
-│       └── static/
-│           └── visualization.js  # hand-written Canvas2D scene, polls /api/graph, no library
+│   ├── dashboard/
+│   │   ├── queries.py          # read-only SELECTs backing every dashboard/visualization view
+│   │   ├── app.py              # create_app(): FastAPI + Jinja2, one route per operational view
+│   │   ├── templates/          # base.html + one template per view, plain tables, no JS framework
+│   │   └── static/
+│   │       └── visualization.js  # hand-written Canvas2D scene, polls /api/graph, no library
+│   └── integrations/
+│       └── mcp_server.py       # create_mcp_server(): memory_search/skill_search/run_task over MCP
 ├── tests/
 │   ├── fixtures/skills/       # sqlite-diagnostics (valid), broken-skill (invalid manifest)
 │   ├── conftest.py         # isolated_env / settings / migrated_settings / db_session
@@ -167,7 +169,8 @@ acrtest/
 │   ├── test_agents_factory.py
 │   ├── test_agents_planner_critic.py
 │   ├── test_agents_topology.py
-│   └── test_dashboard.py
+│   ├── test_dashboard.py
+│   └── test_mcp_server.py
 └── docs/
     ├── ARCHITECTURE.md     # this file
     └── adr/0001-src-layout-single-package.md
@@ -201,6 +204,8 @@ pushed to from here.
 - **httpx** — async HTTP client, used only by `OllamaProvider` (localhost only).
 - **FastAPI + Jinja2 + uvicorn** — the operational dashboard (Phase 11):
   server-rendered HTML, no separate frontend build step.
+- **mcp** (the official Model Context Protocol Python SDK) — the MCP
+  server (Phase 13a). Supports stdio/SSE/streamable-HTTP transports.
 
 ## Local-first data
 
@@ -586,6 +591,38 @@ the simplest transport that's still genuinely live, and there's no
 existing push/streaming infrastructure this phase would otherwise have to
 invent just to serve one page.
 
+## Integrations: MCP server (Phase 13, first sub-slice)
+
+Master §1707-1713 lists six integration targets (MCP, Claude Code, Codex,
+GitHub, browser automation, desktop app) under one phase. They're
+heterogeneous enough — some need no credentials at all, others need a
+GitHub token or a whole new packaging toolchain (Tauri, for "desktop app")
+— that attempting them together would violate the master's own "smallest
+complete vertical slice" rule (§65-66). MCP server exposure went first: no
+credentials, and it's the highest-leverage piece — any MCP client (Claude
+Code, Claude Desktop, anything else speaking the protocol) can use ACR's
+memory, skills, and task execution the moment this runs.
+
+`acr.integrations.mcp_server.create_mcp_server()` doesn't add a new
+integration surface's worth of business logic — it exposes what already
+exists through a new *transport*. `memory_search` and `skill_search` are
+the identical `ToolSpec` handlers Phase 6 registered in
+`acr.tools.default_tools`, invoked through the same
+`acr.tools.invocation.invoke_tool()` permission+audit seam Phase 7 built
+(an external MCP client is a *more* untrusted caller than the local CLI,
+not a less — it goes through that check rather than around it). The
+server's fixed grant set is exactly `{memory.read, skill.read}` — nothing
+beyond what those two read-only tools declare (master §1131-1149: default
+deny). `run_task` mirrors what `acr run` already does: the zero-config
+mock provider, no cost, no external calls — real provider routing for
+MCP-triggered tasks is future work, the same caveat the CLI's own `run`
+carries today.
+
+`acr mcp serve` defaults to stdio (how Claude Code/Desktop launch a local
+MCP server as a subprocess); `--transport sse` or `--transport
+streamable-http` with `--host`/`--port` serve it over HTTP instead. Both
+transports were manually smoke-tested end to end.
+
 ## Commands available today
 
 ```bash
@@ -622,6 +659,7 @@ uv run acr agents plan "objective" [--task-class X]        # AgentSpec via real 
 uv run acr agents spawn "objective" [--force]               # estimate -> run_task() -> critic review
 uv run acr agents topology <task-class>                     # evidence-gated worker-count recommendation
 uv run acr dashboard serve [--host --port]   # dashboard + /visualization: http://127.0.0.1:8765
+uv run acr mcp serve [--transport stdio|sse|streamable-http] [--host --port]
 uv run alembic upgrade head
 uv run pytest
 uv run ruff check .
@@ -635,10 +673,9 @@ plus `acr.learning.distillation` as a real caller) — no
 
 ## Next milestone
 
-Phase 13 — Integrations: MCP, Claude Code, Codex, GitHub, browser
-automation, desktop app (master §1707-1713). Likely needs its own
-sub-slicing when picked up — "desktop app" alone is a large, separate
-vertical (see the master's Tauri note around §1385) — so the first
-sub-slice should probably be MCP server exposure (the most natural,
-highest-leverage "integration" for a tool like this) rather than
-attempting the whole phase at once.
+Phase 13 continued — Integrations: MCP server exposure is done (above).
+Remaining sub-slices: Claude Code / Codex integration, GitHub (needs a
+token from the user — explicit sign-off required before touching
+credentials), browser automation, and desktop app (a Tauri packaging
+effort — see the master's Tauri note around §1385 — large enough it
+deserves its own scoping conversation, not an assumed default).

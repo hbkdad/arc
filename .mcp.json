@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "acr": {
+      "type": "stdio",
+      "command": "uv",
+      "args": ["run", "acr", "mcp", "serve"]
+    }
+  }
+}

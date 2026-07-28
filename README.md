@@ -37,6 +37,13 @@ uv run acr dashboard serve          # operational dashboard: http://127.0.0.1:87
 uv run acr mcp serve                # MCP server (stdio by default)
 ```
 
+### Using ACR from Claude Code
+
+This repo ships a project-scoped [`.mcp.json`](.mcp.json), so opening it
+in Claude Code offers ACR's memory/skill/web/GitHub search tools and task
+execution as MCP tools directly — approve the prompt the first time it
+asks, then they're available every session.
+
 ## Development
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full workflow. Short version:

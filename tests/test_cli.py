@@ -48,6 +48,22 @@ def test_run_command_creates_and_completes_task(migrated_settings: Settings) -> 
     assert "completed" in result.stdout
 
 
+def test_run_command_default_tier_still_uses_mock(migrated_settings: Settings) -> None:
+    # --min-quality-tier defaults to 0, same as before the option existed --
+    # existing scripts/automation must see identical behavior.
+    result = runner.invoke(app, ["run", "hello there", "--min-quality-tier", "0"])
+
+    assert result.exit_code == 0
+    assert "completed" in result.stdout
+
+
+def test_run_command_reports_no_provider_available_cleanly(migrated_settings: Settings) -> None:
+    result = runner.invoke(app, ["run", "hello there", "--min-quality-tier", "5"])
+
+    assert result.exit_code == 1
+    assert "no provider available" in result.stdout
+
+
 _FIXTURE_SKILL = Path(__file__).parent / "fixtures" / "skills" / "sqlite-diagnostics"
 
 

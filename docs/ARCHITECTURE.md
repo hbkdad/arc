@@ -255,7 +255,8 @@ depend on for "call a model" — never a specific SDK. `MockProvider` (no
 network, deterministic) is the CLI's default so `acr run` works with zero
 configuration. `OllamaProvider` talks only to `localhost:11434`. Real
 provider routing (prefer local, escalate to cloud on verification failure)
-is `acr.routing.models` — see Phase 6 below.
+is `acr.routing.models` — see Phase 6 below, and "Real provider routing"
+further down for how `acr run`/MCP `run_task` actually reach it now.
 
 ## Memory system (Phase 2)
 
@@ -829,7 +830,7 @@ followed.
 ```bash
 uv run acr doctor              # Python version, data dir, DB, mock + Ollama providers
 uv run acr version
-uv run acr run "objective"     # create + execute a Task end-to-end via the mock provider
+uv run acr run "objective" [--min-quality-tier N]  # 0=mock (default); raise for Ollama/cloud
 uv run acr context compile "objective" --budget 2000  # compile + print a ContextBundle
 uv run acr skills register <path>        # parse SKILL.yaml, add/update the registry
 uv run acr skills list [--status active]
@@ -878,6 +879,37 @@ uv run pyright
 Memory *writing* is still library-level only (`acr.memory.write_controller`,
 plus `acr.learning.distillation` as a real caller) — no
 `acr memory remember ...` CLI verb for arbitrary facts yet.
+
+## Real provider routing (post-Phase-15 hardening)
+
+Every phase built the routing ladder (Phase 6) and the two primary task-
+execution entry points (`acr run`, MCP's `run_task`), but the entry points
+never actually used the ladder — both hardcoded `MockProvider()` directly,
+so a user with Ollama running or a cloud API key configured had no way to
+actually reach it short of `acr models route`. Fixed by routing both
+through `ModelRouter.select(min_quality_tier=...)` instead:
+`--min-quality-tier` (CLI) / `min_quality_tier` (MCP tool arg) default to
+`0`, which is always the free, always-available mock provider — identical
+behavior to before this existed, so nothing that depended on the old
+hardcoded-mock behavior breaks. Raising the tier opts into whatever's
+actually configured (Ollama first, then cloud, per the ladder's cost
+ordering).
+
+Wiring this up for real (rather than leaving it as an untested code path)
+immediately surfaced a real, previously-invisible bug:
+`acr.providers.ollama.OllamaProvider` hardcoded `DEFAULT_MODEL =
+"llama3.2"` — a model name that has no special status in Ollama (it ships
+with none pulled by default) and simply wasn't present on the machine
+this was tested on, so every real completion attempt 404'd. Fixed by
+making model selection lazy and auto-detecting: `model=None` (the new
+default) resolves to the first result of `list_models()` at completion
+time rather than a hardcoded guess, with a clear `OllamaNoModelError`
+pointing at `ollama pull` if literally nothing is pulled.
+`Settings.ollama_model` (`ACR_OLLAMA_MODEL`) lets a user pin a specific
+model instead. Verified end-to-end against this machine's real, already-
+running Ollama daemon (`qwen2.5-coder:1.5b`, `llama3.1:8b` actually
+pulled) — `acr run "..." --min-quality-tier 1` now genuinely completes via
+a local model, not just in theory.
 
 ## What's left
 

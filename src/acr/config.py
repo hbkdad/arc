@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None
 
+    # Ollama ships with no default model -- every install has pulled whatever
+    # the user wanted. Unset means "auto-detect the first model `ollama list`
+    # reports" (see acr.providers.ollama.OllamaProvider); set this to pin one.
+    ollama_model: str | None = None
+
     # master §1534-1550: disables skill activation, destructive/reversible-
     # write tool invocation, and other mutating operations. Off by default.
     safe_mode: bool = False

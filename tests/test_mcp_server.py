@@ -85,6 +85,16 @@ async def test_run_task_tool_executes_a_real_task(migrated_settings: Settings) -
     assert body["status"] == "completed"
 
 
+async def test_run_task_tool_reports_no_provider_available(migrated_settings: Settings) -> None:
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    server = create_mcp_server(migrated_settings)
+    with pytest.raises(ToolError, match="min_quality_tier"):
+        await server.call_tool(
+            "run_task", {"objective": "say hello via mcp", "min_quality_tier": 5}
+        )
+
+
 async def test_web_fetch_tool_fetches_real_content(
     migrated_settings: Settings, local_html_server: str
 ) -> None:

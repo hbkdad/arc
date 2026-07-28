@@ -60,7 +60,12 @@ from acr.logging import configure_logging, get_logger
 from acr.memory.write_controller import WriteEvaluation
 from acr.providers.base import CompletionRequest
 from acr.providers.mock import MockProvider
-from acr.routing.models import ModelProfile, RoutedCompletion, build_default_router
+from acr.routing.models import (
+    ModelProfile,
+    NoProviderAvailableError,
+    RoutedCompletion,
+    build_default_router,
+)
 from acr.security.audit import recent_audit_events
 from acr.security.injection import scan_for_injection
 from acr.security.permissions import Capability, PermissionDeniedError, PermissionSet
@@ -164,20 +169,37 @@ def doctor() -> None:
 @app.command()
 def run(
     objective: str = typer.Argument(..., help="Objective for the task engine to execute."),
+    min_quality_tier: int = typer.Option(
+        0,
+        "--min-quality-tier",
+        help="0=mock only (default, zero-config, no cost). Raise to prefer a "
+        "configured Ollama/cloud provider via the routing ladder (Phase 6).",
+    ),
 ) -> None:
     """Create and execute a task end to end (task engine + provider + telemetry).
 
-    Uses the local, zero-config `mock` provider. Real provider routing
-    (Ollama, cloud, escalation) is master spec Phase 6.
+    Provider selection goes through the same routing ladder as
+    `acr models route`: cheapest-qualified-and-available wins. At the
+    default `--min-quality-tier 0`, that's always the zero-config mock
+    provider (tier 0, always available) -- identical behavior to before
+    this option existed, so existing scripts/automation aren't affected.
+    Raising the tier opts into real Ollama/cloud usage if configured.
     """
     logger = get_logger("acr.cli.run")
     settings = get_settings()
+    router = build_default_router(settings)
 
     async def _run() -> Task:
+        profile = await router.select(min_quality_tier=min_quality_tier)
         async with session_scope(settings) as session:
-            return await run_task(session, objective, MockProvider(), TelemetryRecorder())
+            return await run_task(session, objective, profile.provider, TelemetryRecorder())
 
-    task = asyncio.run(_run())
+    try:
+        task = asyncio.run(_run())
+    except NoProviderAvailableError as exc:
+        typer.echo(f"no provider available: {exc}")
+        raise typer.Exit(code=1) from exc
+
     typer.echo(f"task {task.id} -> {task.status.value}")
     logger.info("cli.run.completed", task_id=task.id, status=task.status.value)
 

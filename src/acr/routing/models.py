@@ -116,7 +116,10 @@ def build_default_router(settings: Settings) -> ModelRouter:
                 provider=MockProvider(), name="mock", cost_per_1k_tokens=0.0, quality_tier=0
             ),
             ModelProfile(
-                provider=OllamaProvider(), name="ollama", cost_per_1k_tokens=0.0, quality_tier=1
+                provider=OllamaProvider(model=settings.ollama_model),
+                name="ollama",
+                cost_per_1k_tokens=0.0,
+                quality_tier=1,
             ),
             ModelProfile(
                 provider=OpenAICompatibleProvider(api_key=settings.openai_api_key),

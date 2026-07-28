@@ -8,10 +8,11 @@ integration surface: `memory_search`/`skill_search`/`web_fetch`/
 `acr.tools.invocation.invoke_tool()` permission+audit seam Phase 7 built —
 an external MCP client is a *more* untrusted caller than the CLI, not a
 less, so it goes through that check rather than around it. `run_task`
-mirrors exactly what `acr run` already does (the zero-config mock
-provider, no cost, no external calls) — real provider routing for
-MCP-triggered tasks is future work, same caveat the CLI's own `run`
-command carries today.
+mirrors exactly what `acr run` does: routed through the same cheapest-
+qualified-and-available ladder (`min_quality_tier=0` by default is always
+the zero-config mock provider, no cost, no external calls — identical to
+this tool's original hardcoded-mock behavior unless the caller explicitly
+raises the tier).
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ from acr.config import Settings, get_settings
 from acr.core.execution import run_task as run_task_engine
 from acr.core.tasks.models import Task
 from acr.db.base import make_engine, make_session_factory
-from acr.providers.mock import MockProvider
+from acr.routing.models import build_default_router
 from acr.security.permissions import Capability, PermissionSet
 from acr.telemetry.recorder import TelemetryRecorder
 from acr.tools.default_tools import build_default_registry
@@ -47,6 +48,7 @@ def create_mcp_server(settings: Settings | None = None) -> MCPServer:
     engine = make_engine(settings)
     session_factory = make_session_factory(engine)
     registry = build_default_registry()
+    router = build_default_router(settings)
 
     @asynccontextmanager
     async def _session() -> AsyncIterator[AsyncSession]:
@@ -145,11 +147,18 @@ def create_mcp_server(settings: Settings | None = None) -> MCPServer:
             await session.commit()
             return result
 
-    @server.tool(description="Run an objective through ACR's task engine (mock provider).")
-    async def run_task(objective: str) -> dict[str, Any]:
+    @server.tool(
+        description=(
+            "Run an objective through ACR's task engine. Uses the zero-config mock "
+            "provider by default (min_quality_tier=0); raise the tier to prefer a "
+            "configured Ollama/cloud provider instead."
+        )
+    )
+    async def run_task(objective: str, min_quality_tier: int = 0) -> dict[str, Any]:
+        profile = await router.select(min_quality_tier=min_quality_tier)
         async with _session() as session:
             task: Task = await run_task_engine(
-                session, objective, MockProvider(), TelemetryRecorder()
+                session, objective, profile.provider, TelemetryRecorder()
             )
             return {"id": task.id, "objective": task.objective, "status": task.status.value}
 

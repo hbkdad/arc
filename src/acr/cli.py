@@ -35,14 +35,21 @@ from acr.logging import configure_logging, get_logger
 from acr.providers.base import CompletionRequest
 from acr.providers.mock import MockProvider
 from acr.routing.models import ModelProfile, RoutedCompletion, build_default_router
-from acr.skills.models import SkillRecord, SkillStatus
-from acr.skills.registry import list_skills, register, set_status
+from acr.security.audit import recent_audit_events
+from acr.security.injection import scan_for_injection
+from acr.security.permissions import Capability, PermissionDeniedError, PermissionSet
+from acr.security.safe_mode import SafeModeError
+from acr.skills.models import InvalidSkillTransition, SkillRecord, SkillStatus
+from acr.skills.registry import SkillNotFoundError, list_skills, register, set_status
 from acr.skills.routing import RoutedSkill, route
 from acr.skills.search import SkillSearchResult, search
+from acr.telemetry.models import TelemetryEvent
 from acr.telemetry.recorder import TelemetryRecorder
 from acr.tools.default_tools import build_default_registry
 from acr.tools.exposure import expose_tools
+from acr.tools.invocation import invoke_tool
 from acr.tools.models import ToolSpec
+from acr.tools.registry import ToolNotFoundError
 
 app = typer.Typer(name="acr", help="ACR — Adaptive Cognitive Runtime", no_args_is_help=True)
 context_app = typer.Typer(name="context", help="Context compiler operations.")
@@ -51,12 +58,14 @@ benchmark_app = typer.Typer(name="benchmark", help="Benchmark suites.")
 waste_app = typer.Typer(name="waste", help="Token waste analysis.")
 models_app = typer.Typer(name="models", help="Model routing.")
 tools_app = typer.Typer(name="tools", help="Tool registry operations.")
+security_app = typer.Typer(name="security", help="Security: audit log, injection scanning.")
 app.add_typer(context_app)
 app.add_typer(skills_app)
 app.add_typer(benchmark_app)
 app.add_typer(waste_app)
 app.add_typer(models_app)
 app.add_typer(tools_app)
+app.add_typer(security_app)
 
 # Every registered benchmark suite: name -> (seed, build_cases). Only one
 # exists today (master principle #23: no feature expansion without
@@ -213,11 +222,19 @@ def skills_activate(
 
     async def _set_status() -> SkillRecord:
         async with session_scope(settings) as session:
-            record = await set_status(session, skill_id, status)
+            record = await set_status(session, skill_id, status, safe_mode=settings.safe_mode)
             await session.commit()
             return record
 
-    record = asyncio.run(_set_status())
+    try:
+        record = asyncio.run(_set_status())
+    except SkillNotFoundError as exc:
+        typer.echo(f"unknown skill: {exc}")
+        raise typer.Exit(code=1) from exc
+    except (SafeModeError, InvalidSkillTransition) as exc:
+        typer.echo(f"denied: {exc}")
+        raise typer.Exit(code=1) from exc
+
     typer.echo(f"{record.id} -> {record.status.value}")
 
 
@@ -372,6 +389,99 @@ def tools_expose(
         return
     for tool in exposed:
         typer.echo(f"{tool.name}\t{tool.description}")
+
+
+# The CLI operator's own local session: full read access to ACR's own
+# read-only search tools. Both `memory_search` and `skill_search` only need
+# these two capabilities (see their ToolSpec.permissions in default_tools.py).
+_CLI_OPERATOR_GRANTS = PermissionSet(
+    granted=frozenset({Capability.MEMORY_READ, Capability.SKILL_READ})
+)
+
+
+@tools_app.command("invoke")
+def tools_invoke(
+    name: str = typer.Argument(..., help="Registered tool name, e.g. memory_search."),
+    query: str = typer.Option(..., "--query", help="Query argument passed to the tool."),
+    limit: int = typer.Option(5, "--limit"),
+) -> None:
+    """Invoke a registered tool for real, through permission + safe-mode checks."""
+    settings = get_settings()
+    registry = build_default_registry()
+
+    async def _invoke() -> object:
+        async with session_scope(settings) as session:
+            result = await invoke_tool(
+                session,
+                registry,
+                name,
+                grants=_CLI_OPERATOR_GRANTS,
+                telemetry=TelemetryRecorder(),
+                safe_mode=settings.safe_mode,
+                query=query,
+                limit=limit,
+            )
+            await session.commit()
+            return result
+
+    try:
+        result = asyncio.run(_invoke())
+    except ToolNotFoundError as exc:
+        typer.echo(f"unknown tool: {exc}")
+        raise typer.Exit(code=1) from exc
+    except (PermissionDeniedError, SafeModeError) as exc:
+        typer.echo(f"denied: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(result)
+
+
+@app.command("safe-mode")
+def safe_mode_status() -> None:
+    """Show whether safe mode is active (master §1534-1550).
+
+    Safe mode is a settings flag, not a toggle this command flips: set
+    `ACR_SAFE_MODE=1` (or add it to `.env`) to enable it, then re-run.
+    """
+    settings = get_settings()
+    state = "ON" if settings.safe_mode else "OFF"
+    typer.echo(f"safe mode: {state}  (set ACR_SAFE_MODE=1 to enable)")
+    if not settings.safe_mode:
+        typer.echo("permitted when ON: inspection, retrieval, read-only model use, diagnostics")
+        typer.echo("blocked when ON: skill activation, reversible-write/destructive tool calls")
+
+
+@security_app.command("audit")
+def security_audit(
+    limit: int = typer.Option(20, "--limit", help="Maximum number of recent events to show."),
+) -> None:
+    """Show recent security audit events (permission checks, safe-mode blocks)."""
+    settings = get_settings()
+
+    async def _audit() -> list[TelemetryEvent]:
+        async with session_scope(settings) as session:
+            return await recent_audit_events(session, limit=limit)
+
+    events = asyncio.run(_audit())
+    if not events:
+        typer.echo("no audit events recorded")
+        return
+    for event in events:
+        action = event.payload.get("action", "?")
+        outcome = event.payload.get("outcome", "?")
+        typer.echo(f"{event.created_at.isoformat()}\t{action}\t{outcome}")
+
+
+@security_app.command("scan")
+def security_scan(
+    text: str = typer.Argument(..., help="Text to scan for embedded-instruction patterns."),
+) -> None:
+    """Run the prompt-injection heuristic scanner over arbitrary text."""
+    result = scan_for_injection(text)
+    if not result.suspicious:
+        typer.echo("clean: no known injection patterns matched")
+        return
+    typer.echo(f"suspicious: matched {', '.join(result.matched_patterns)}")
 
 
 if __name__ == "__main__":

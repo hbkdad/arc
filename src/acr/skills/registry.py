@@ -13,6 +13,7 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from acr.security.safe_mode import require_not_safe_mode
 from acr.skills.format import SkillManifest, load_manifest
 from acr.skills.models import SkillRecord, SkillStatus
 
@@ -71,13 +72,19 @@ class SkillNotFoundError(LookupError):
     """Raised when a lifecycle action targets an unknown skill id."""
 
 
-async def set_status(session: AsyncSession, skill_id: str, target: SkillStatus) -> SkillRecord:
+async def set_status(
+    session: AsyncSession, skill_id: str, target: SkillStatus, *, safe_mode: bool = False
+) -> SkillRecord:
     """Manual activation/lifecycle control (master §696: "manual activation").
 
     A thin, validated wrapper over `SkillRecord.transition` — raises
-    `SkillNotFoundError` for an unknown id and `InvalidSkillTransition`
-    (from `acr.skills.models`) for a disallowed transition.
+    `SkillNotFoundError` for an unknown id, `InvalidSkillTransition` (from
+    `acr.skills.models`) for a disallowed transition, and `SafeModeError`
+    (master §1534-1550: safe mode disables skill activation) if `safe_mode`
+    is set and `target` is ACTIVE.
     """
+    if target is SkillStatus.ACTIVE:
+        require_not_safe_mode(safe_mode, f"skill.activate:{skill_id}")
     record = await get(session, skill_id)
     if record is None:
         raise SkillNotFoundError(skill_id)

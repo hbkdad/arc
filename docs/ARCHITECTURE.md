@@ -12,10 +12,11 @@ A modular monorepo: `apps/` (api, dashboard, website, desktop), `packages/`
 `tools/`, `learning/`, `telemetry/`, `security/`), plus `benchmarks/`,
 `migrations/`, `tests/`, `scripts/`, `examples/`, `docs/`.
 
-## Current shape (Phase 0 Foundation + Phase 1 Execution + Phase 2 Memory + Phase 3 Context + Phase 4 Skills + Phase 5 Evaluation + Phase 6 Routing)
+## Current shape (Phase 0 Foundation + Phase 1 Execution + Phase 2 Memory + Phase 3 Context + Phase 4 Skills + Phase 5 Evaluation + Phase 6 Routing + Phase 7 Security)
 
 Only the Python CLI foundation, task engine, memory system, context compiler,
-skill system, evaluation system, and model/tool routing exist. See
+skill system, evaluation system, model/tool routing, and security layer
+exist. See
 [`docs/adr/0001-src-layout-single-package.md`](adr/0001-src-layout-single-package.md)
 for why this is one `src/acr/` package rather than the full multi-directory
 tree, and when to split it.
@@ -85,11 +86,20 @@ acrtest/
 │   │   └── memory_recall.py    # a genuine memory-recall suite exercising Phase 2 code
 │   ├── routing/
 │   │   └── models.py          # ModelProfile/ModelRouter: cheapest-qualified + escalation
-│   └── tools/
-│       ├── models.py          # ToolSpec (master §827-838 field set), SideEffectLevel
-│       ├── registry.py        # in-memory ToolRegistry (tools are code, not user data)
-│       ├── default_tools.py    # real tools: memory_search, skill_search
-│       └── exposure.py         # expose_tools(): task-specific subset, min-relevance gated
+│   ├── tools/
+│   │   ├── models.py          # ToolSpec (master §827-838 field set), SideEffectLevel
+│   │   ├── registry.py        # in-memory ToolRegistry (tools are code, not user data)
+│   │   ├── default_tools.py    # real tools: memory_search, skill_search
+│   │   ├── exposure.py         # expose_tools(): task-specific subset, min-relevance gated
+│   │   └── invocation.py       # invoke_tool(): permission + safe-mode check, audit-logged
+│   └── security/
+│       ├── permissions.py     # Capability enum, default-deny PermissionSet
+│       ├── trust.py            # TrustLevel, combine_trust() (minimum of the chain)
+│       ├── injection.py        # scan_for_injection(): deterministic heuristic scanner
+│       ├── secrets.py          # redact_secrets()/redact_mapping() — wired into telemetry
+│       ├── sandbox.py          # SandboxPolicy, build_sandboxed_env() (env allowlist + redact)
+│       ├── safe_mode.py        # SafeModeError, require_not_safe_mode()
+│       └── audit.py            # record_audit_event()/recent_audit_events() (via telemetry)
 ├── tests/
 │   ├── fixtures/skills/       # sqlite-diagnostics (valid), broken-skill (invalid manifest)
 │   ├── conftest.py         # isolated_env / settings / migrated_settings / db_session
@@ -117,7 +127,15 @@ acrtest/
 │   ├── test_waste_analyzer.py
 │   ├── test_providers_cloud.py
 │   ├── test_model_router.py
-│   └── test_tools.py
+│   ├── test_tools.py
+│   ├── test_security_permissions.py
+│   ├── test_security_trust.py
+│   ├── test_security_injection.py
+│   ├── test_security_secrets.py
+│   ├── test_security_sandbox.py
+│   ├── test_security_safe_mode.py
+│   ├── test_security_audit.py
+│   └── test_tools_invocation.py
 └── docs/
     ├── ARCHITECTURE.md     # this file
     └── adr/0001-src-layout-single-package.md
@@ -310,6 +328,40 @@ single word two tools happen to share (e.g. both being "search" tools)
 isn't enough to expose an otherwise-irrelevant one — a real gap this
 phase's own tests found.
 
+## Security (Phase 7)
+
+`acr.security.permissions.PermissionSet` is default-deny: nothing is
+granted unless explicitly constructed with capabilities, and an
+unrecognized capability string denies rather than crashing (a real gap this
+phase's own tests found — `Capability("skill.read")`-style string coercion
+would otherwise raise an uncaught `ValueError`). `acr.security.trust`
+implements master §1122-1130's five trust levels and `combine_trust()`,
+which takes the *minimum* of its inputs — a chain is only as trusted as its
+weakest link. `memory_trust_level()` maps a `MemoryRecord`'s status
+directly onto trust: only `CONFIRMED` reaches `VERIFIED_MEMORY`,
+`QUARANTINED` (no evidence) is `UNTRUSTED`, everything else is
+`RETRIEVED_CONTENT`. `acr.security.injection.scan_for_injection()` is a
+deterministic heuristic over untrusted text — it flags, it never silently
+blocks or trusts (master §1150-1166).
+
+`acr.security.secrets.redact_mapping()` is wired directly into
+`acr.telemetry.recorder.TelemetryRecorder.emit()` — every persisted/logged
+event payload passes through it first (master §1024/§1191). `sandbox.py`'s
+`SandboxPolicy` + `build_sandboxed_env()` are real and testable today even
+though ACR has no code-execution engine yet to sandbox (skills are metadata
++ instructions, not executable code until Phase 9) — an env-var allowlist
+filter + secret redaction, ready for whatever executes untrusted code
+first.
+
+Safe mode (`Settings.safe_mode`, `ACR_SAFE_MODE`) and audit logging (reuses
+`TelemetryEvent` — a `security.audit` event is a telemetry event like any
+other, not a parallel logging system) are wired into the two real mutating
+operations ACR has: `skills.registry.set_status()` blocks activation
+(`SafeModeError`) when safe mode is on, and `tools.invocation.invoke_tool()`
+checks both a tool's declared `permissions` against the caller's grants and
+(for non-`READ_ONLY` tools) safe mode, audit-logging every call — granted
+or denied.
+
 ## Commands available today
 
 ```bash
@@ -330,6 +382,10 @@ uv run acr models list                     # routing ladder + live availability
 uv run acr models route "prompt" [--min-quality-tier N]
 uv run acr tools list
 uv run acr tools expose "task description" [--max-tools N]
+uv run acr tools invoke <name> --query "..." [--limit N]   # permission + safe-mode checked
+uv run acr safe-mode                       # show whether ACR_SAFE_MODE is on
+uv run acr security scan "text"            # prompt-injection heuristic scanner
+uv run acr security audit [--limit N]      # recent audit events
 uv run alembic upgrade head
 uv run pytest
 uv run ruff check .
@@ -343,5 +399,5 @@ to write memory from outside a test, e.g. experience distillation (Phase 8).
 
 ## Next milestone
 
-Phase 7 — Security: permissions, trust boundaries, sandbox, secrets, safe
-mode, audit logs (master §1118-1224).
+Phase 8 — Learning: experience distiller, utility updates, candidate memory
+promotion, candidate skill generation (master §631-644, §697-716).

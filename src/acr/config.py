@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None
 
+    # master §1534-1550: disables skill activation, destructive/reversible-
+    # write tool invocation, and other mutating operations. Off by default.
+    safe_mode: bool = False
+
     @property
     def database_path(self) -> Path:
         return self.data_dir / "acr.db"

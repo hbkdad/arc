@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from acr.security.safe_mode import SafeModeError
 from acr.skills.models import InvalidSkillTransition, SkillStatus
 from acr.skills.registry import SkillNotFoundError, get, list_skills, register, set_status
 
@@ -72,3 +73,20 @@ async def test_full_lifecycle_experimental_to_active_to_deprecated_to_retired(
 
     record = await set_status(db_session, record.id, SkillStatus.RETIRED)
     assert record.status is SkillStatus.RETIRED
+
+
+async def test_set_status_blocks_activation_in_safe_mode(db_session: AsyncSession) -> None:
+    record = await register(db_session, FIXTURES / "sqlite-diagnostics")
+
+    with pytest.raises(SafeModeError):
+        await set_status(db_session, record.id, SkillStatus.ACTIVE, safe_mode=True)
+
+
+async def test_set_status_allows_non_activating_transitions_in_safe_mode(
+    db_session: AsyncSession,
+) -> None:
+    record = await register(db_session, FIXTURES / "sqlite-diagnostics")
+
+    # QUARANTINED is not "activation" — safe mode shouldn't block it.
+    record = await set_status(db_session, record.id, SkillStatus.QUARANTINED, safe_mode=True)
+    assert record.status is SkillStatus.QUARANTINED

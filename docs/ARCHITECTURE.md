@@ -12,11 +12,11 @@ A modular monorepo: `apps/` (api, dashboard, website, desktop), `packages/`
 `tools/`, `learning/`, `telemetry/`, `security/`), plus `benchmarks/`,
 `migrations/`, `tests/`, `scripts/`, `examples/`, `docs/`.
 
-## Current shape (Phase 0 Foundation + Phase 1 Execution + Phase 2 Memory + Phase 3 Context + Phase 4 Skills + Phase 5 Evaluation + Phase 6 Routing + Phase 7 Security + Phase 8 Learning)
+## Current shape (Phase 0 Foundation + Phase 1 Execution + Phase 2 Memory + Phase 3 Context + Phase 4 Skills + Phase 5 Evaluation + Phase 6 Routing + Phase 7 Security + Phase 8 Learning + Phase 9 Skill Evolution)
 
 Only the Python CLI foundation, task engine, memory system, context compiler,
-skill system, evaluation system, model/tool routing, security layer, and
-learning system exist. See
+skill system, evaluation system, model/tool routing, security layer,
+learning system, and skill validation/evolution exist. See
 [`docs/adr/0001-src-layout-single-package.md`](adr/0001-src-layout-single-package.md)
 for why this is one `src/acr/` package rather than the full multi-directory
 tree, and when to split it.
@@ -73,7 +73,9 @@ acrtest/
 │   │   ├── fts.py             # skills_fts virtual table + sync triggers
 │   │   ├── registry.py        # register()/get()/list_skills()/set_status()
 │   │   ├── search.py          # FTS keyword search over the registry
-│   │   └── routing.py         # route(): the master §685-696 8-step process
+│   │   ├── routing.py         # route(): the master §685-696 8-step process
+│   │   ├── validation.py      # run_validation(): the master §717-731 pipeline
+│   │   └── evolution.py       # versioned candidates, compare/promote/rollback
 │   ├── evaluation/
 │   │   ├── models.py          # EvaluationCriterion, CriterionScore, EvaluationResult
 │   │   ├── evaluators.py       # Evaluator ABC, ChecklistEvaluator, ExactMatchEvaluator
@@ -144,7 +146,9 @@ acrtest/
 │   ├── test_learning_distillation.py
 │   ├── test_learning_utility.py
 │   ├── test_learning_promotion.py
-│   └── test_learning_skill_generation.py
+│   ├── test_learning_skill_generation.py
+│   ├── test_skill_validation.py
+│   └── test_skill_evolution.py
 └── docs/
     ├── ARCHITECTURE.md     # this file
     └── adr/0001-src-layout-single-package.md
@@ -411,6 +415,37 @@ re-quarantines a skill that a human has already reviewed and activated (a
 real bug this phase's own tests caught — the naive version crashed trying
 to re-transition an already-quarantined skill on a second run).
 
+## Skill validation and evolution (Phase 9)
+
+`acr.skills.validation.run_validation()` runs the master §717-731 pipeline:
+schema validation (re-parses `SKILL.yaml` — catches *drift*, since
+`register()` already requires a valid manifest to create a `SkillRecord` at
+all) -> dependency check (declared `tools` against a supplied
+`ToolRegistry`, Phase 6) -> static security scan (`scan_for_injection()`
+over description/applicability/instructions.md, Phase 7) -> permission
+analysis (declared `permissions` against known `Capability` values, Phase
+7) -> evaluator review (manifest completeness, via Phase 5's
+`ChecklistEvaluator`). ACR has no code-execution engine yet — a skill
+package is metadata plus human-readable instructions, not executable code
+— so sandbox execution / unit / scenario / adversarial tests / benchmark
+are honestly reported `SKIPPED`, never faked as passing (master §731: a
+candidate must not be promoted merely because it completes one task, and
+certainly not on a check that never ran). Skipped stages don't count as
+evidence either way; only an explicit `FAILED` blocks `report.passed`.
+
+`acr.skills.evolution` implements master §733-746: "never mutate active
+skills invisibly." `create_candidate_version()` writes a new `SKILL.yaml`
+under a versioned id (`<base_id>@v<n>`) rather than editing the active
+skill's package — both versions coexist as separate `skills` rows, so nothing
+is ever silently overwritten. `compare_versions()` reduces master's
+quality/tokens/latency/cost dimensions to what ACR can measure without real
+usage data yet: `reliability` (Phase 8's utility tracking) and
+`token_estimate`; a candidate that regresses on either is not recommended
+for promotion. `promote_evolution()` deprecates an active baseline and
+activates the candidate; `rollback_evolution()` reverses that — the
+baseline is never deleted, so rollback is just reactivating it. Both
+respect safe mode (Phase 7).
+
 ## Commands available today
 
 ```bash
@@ -438,6 +473,11 @@ uv run acr security audit [--limit N]      # recent audit events
 uv run acr learn distill <task-id>         # trace -> compact memory candidate
 uv run acr learn promote [--min-utility N --min-successful-uses N]
 uv run acr learn generate-skills [--min-repeats N]
+uv run acr skills validate <id> [--check-tools]
+uv run acr skills evolve <id> [--description "..."]
+uv run acr skills compare-evolution <baseline-id> <candidate-id>
+uv run acr skills promote-evolution <baseline-id> <candidate-id>
+uv run acr skills rollback-evolution <active-id> <restore-id>
 uv run alembic upgrade head
 uv run pytest
 uv run ruff check .
@@ -451,5 +491,5 @@ plus `acr.learning.distillation` as a real caller) — no
 
 ## Next milestone
 
-Phase 9 — Skill Evolution: validation, benchmarking, version comparison,
-rollback (master §717-746).
+Phase 10 — Agents: agent specification, factory, planner, critic, topology
+history (master §747-793).

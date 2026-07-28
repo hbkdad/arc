@@ -47,10 +47,18 @@ from acr.security.audit import recent_audit_events
 from acr.security.injection import scan_for_injection
 from acr.security.permissions import Capability, PermissionDeniedError, PermissionSet
 from acr.security.safe_mode import SafeModeError
+from acr.skills.evolution import (
+    EvolutionComparison,
+    compare_versions,
+    create_candidate_version,
+    promote_evolution,
+    rollback_evolution,
+)
 from acr.skills.models import InvalidSkillTransition, SkillRecord, SkillStatus
-from acr.skills.registry import SkillNotFoundError, list_skills, register, set_status
+from acr.skills.registry import SkillNotFoundError, get, list_skills, register, set_status
 from acr.skills.routing import RoutedSkill, route
 from acr.skills.search import SkillSearchResult, search
+from acr.skills.validation import ValidationReport, run_validation
 from acr.telemetry.models import TelemetryEvent
 from acr.telemetry.recorder import TelemetryRecorder
 from acr.tools.default_tools import build_default_registry
@@ -568,6 +576,167 @@ def learn_generate_skills(
         typer.echo(
             f"{record.id}\t{record.status.value}\t{pattern.occurrences}x\t{pattern.objective}"
         )
+
+
+@skills_app.command("validate")
+def skills_validate(
+    skill_id: str = typer.Argument(..., help="Skill id to validate."),
+    check_tools: bool = typer.Option(
+        False, "--check-tools", help="Check declared tools against the default tool registry."
+    ),
+) -> None:
+    """Run the validation pipeline against a registered skill (master §717-731)."""
+    settings = get_settings()
+
+    async def _validate() -> ValidationReport:
+        async with session_scope(settings) as session:
+            record = await get(session, skill_id)
+            if record is None:
+                raise SkillNotFoundError(skill_id)
+            tool_registry = build_default_registry() if check_tools else None
+            report = await run_validation(
+                session, record, tool_registry=tool_registry, telemetry=TelemetryRecorder()
+            )
+            await session.commit()
+            return report
+
+    try:
+        report = asyncio.run(_validate())
+    except SkillNotFoundError as exc:
+        typer.echo(f"unknown skill: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    for stage in report.stages:
+        typer.echo(f"[{stage.status.value:8}] {stage.name}: {stage.detail}")
+    typer.echo(f"overall: {'PASSED' if report.passed else 'FAILED'}")
+    if not report.passed:
+        raise typer.Exit(code=1)
+
+
+@skills_app.command("evolve")
+def skills_evolve(
+    skill_id: str = typer.Argument(..., help="Baseline skill id to evolve."),
+    description: str | None = typer.Option(
+        None, "--description", help="Override description for the new candidate version."
+    ),
+) -> None:
+    """Create a new candidate version of a skill without touching the original."""
+    settings = get_settings()
+    overrides: dict[str, object] = {}
+    if description is not None:
+        overrides["description"] = description
+
+    async def _evolve() -> SkillRecord:
+        async with session_scope(settings) as session:
+            baseline = await get(session, skill_id)
+            if baseline is None:
+                raise SkillNotFoundError(skill_id)
+            candidate = await create_candidate_version(
+                session, settings.data_dir, baseline, overrides
+            )
+            await session.commit()
+            return candidate
+
+    try:
+        candidate = asyncio.run(_evolve())
+    except SkillNotFoundError as exc:
+        typer.echo(f"unknown skill: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(f"{candidate.id} -> {candidate.status.value}")
+
+
+@skills_app.command("compare-evolution")
+def skills_compare_evolution(
+    baseline_id: str = typer.Argument(...),
+    candidate_id: str = typer.Argument(...),
+) -> None:
+    """Compare a baseline and candidate skill version."""
+    settings = get_settings()
+
+    async def _compare() -> EvolutionComparison:
+        async with session_scope(settings) as session:
+            baseline = await get(session, baseline_id)
+            candidate = await get(session, candidate_id)
+            if baseline is None:
+                raise SkillNotFoundError(baseline_id)
+            if candidate is None:
+                raise SkillNotFoundError(candidate_id)
+            return compare_versions(baseline, candidate)
+
+    try:
+        comparison = asyncio.run(_compare())
+    except SkillNotFoundError as exc:
+        typer.echo(f"unknown skill: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(
+        f"reliability: {comparison.baseline_reliability:.2f} -> "
+        f"{comparison.candidate_reliability:.2f}"
+    )
+    typer.echo(
+        f"tokens: {comparison.baseline_token_estimate} -> {comparison.candidate_token_estimate}"
+    )
+    typer.echo(f"recommend_promote={comparison.recommend_promote}: {comparison.reason}")
+
+
+@skills_app.command("promote-evolution")
+def skills_promote_evolution(
+    baseline_id: str = typer.Argument(...),
+    candidate_id: str = typer.Argument(...),
+) -> None:
+    """Deprecate the baseline (if active) and activate the candidate version."""
+    settings = get_settings()
+
+    async def _promote() -> SkillRecord:
+        async with session_scope(settings) as session:
+            baseline = await get(session, baseline_id)
+            if baseline is None:
+                raise SkillNotFoundError(baseline_id)
+            promoted = await promote_evolution(
+                session, baseline, candidate_id, safe_mode=settings.safe_mode
+            )
+            await session.commit()
+            return promoted
+
+    try:
+        promoted = asyncio.run(_promote())
+    except SkillNotFoundError as exc:
+        typer.echo(f"unknown skill: {exc}")
+        raise typer.Exit(code=1) from exc
+    except (SafeModeError, InvalidSkillTransition) as exc:
+        typer.echo(f"denied: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(f"{promoted.id} -> {promoted.status.value}")
+
+
+@skills_app.command("rollback-evolution")
+def skills_rollback_evolution(
+    active_id: str = typer.Argument(..., help="Currently active skill id to deprecate."),
+    restore_id: str = typer.Argument(..., help="Prior version to reactivate."),
+) -> None:
+    """Deprecate the currently active version and restore a prior one."""
+    settings = get_settings()
+
+    async def _rollback() -> SkillRecord:
+        async with session_scope(settings) as session:
+            restored = await rollback_evolution(
+                session, active_id=active_id, restore_id=restore_id, safe_mode=settings.safe_mode
+            )
+            await session.commit()
+            return restored
+
+    try:
+        restored = asyncio.run(_rollback())
+    except SkillNotFoundError as exc:
+        typer.echo(f"unknown skill: {exc}")
+        raise typer.Exit(code=1) from exc
+    except (SafeModeError, InvalidSkillTransition) as exc:
+        typer.echo(f"denied: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(f"restored {restored.id} -> {restored.status.value}")
 
 
 if __name__ == "__main__":

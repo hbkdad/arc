@@ -272,3 +272,60 @@ def test_learn_generate_skills_generates_a_quarantined_skill(migrated_settings: 
     assert result.exit_code == 0
     assert "quarantined" in result.stdout
     assert "repeat this task" in result.stdout
+
+
+def test_skills_validate_reports_stage_by_stage(migrated_settings: Settings) -> None:
+    runner.invoke(app, ["skills", "register", str(_FIXTURE_SKILL)])
+
+    result = runner.invoke(app, ["skills", "validate", "sqlite-diagnostics"])
+
+    assert result.exit_code == 0
+    assert "schema_validation" in result.stdout
+    assert "overall: PASSED" in result.stdout
+
+
+def test_skills_validate_reports_unknown_skill_cleanly(migrated_settings: Settings) -> None:
+    result = runner.invoke(app, ["skills", "validate", "does-not-exist"])
+    assert result.exit_code == 1
+    assert "unknown skill" in result.stdout
+
+
+def test_skills_evolve_compare_and_promote_end_to_end(migrated_settings: Settings) -> None:
+    runner.invoke(app, ["skills", "register", str(_FIXTURE_SKILL)])
+    runner.invoke(app, ["skills", "activate", "sqlite-diagnostics", "--status", "active"])
+
+    evolve_result = runner.invoke(
+        app, ["skills", "evolve", "sqlite-diagnostics", "--description", "Improved diagnostics."]
+    )
+    assert evolve_result.exit_code == 0
+    assert "sqlite-diagnostics@v2" in evolve_result.stdout
+
+    compare_result = runner.invoke(
+        app, ["skills", "compare-evolution", "sqlite-diagnostics", "sqlite-diagnostics@v2"]
+    )
+    assert compare_result.exit_code == 0
+    assert "recommend_promote=" in compare_result.stdout
+
+    promote_result = runner.invoke(
+        app, ["skills", "promote-evolution", "sqlite-diagnostics", "sqlite-diagnostics@v2"]
+    )
+    assert promote_result.exit_code == 0
+    assert "sqlite-diagnostics@v2 -> active" in promote_result.stdout
+
+    rollback_result = runner.invoke(
+        app,
+        [
+            "skills",
+            "rollback-evolution",
+            "sqlite-diagnostics@v2",
+            "sqlite-diagnostics",
+        ],
+    )
+    assert rollback_result.exit_code == 0
+    assert "restored sqlite-diagnostics -> active" in rollback_result.stdout
+
+
+def test_skills_evolve_reports_unknown_baseline_cleanly(migrated_settings: Settings) -> None:
+    result = runner.invoke(app, ["skills", "evolve", "does-not-exist"])
+    assert result.exit_code == 1
+    assert "unknown skill" in result.stdout

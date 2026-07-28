@@ -35,7 +35,7 @@ class AgentTopologyRecord(Base):
     __tablename__ = "agent_topology_records"
 
     id: Mapped[str] = mapped_column(primary_key=True, default=_new_id)
-    task_class: Mapped[str]
+    task_class: Mapped[str] = mapped_column(index=True)
     worker_count: Mapped[int]
     model_names: Mapped[list[str]] = mapped_column(JSON, default=list)
     skill_ids: Mapped[list[str]] = mapped_column(JSON, default=list)

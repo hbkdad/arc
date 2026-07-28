@@ -82,8 +82,8 @@ class MemoryRecord(Base):
 
     id: Mapped[str] = mapped_column(primary_key=True, default=_new_id)
 
-    type: Mapped[MemoryType] = mapped_column(SAEnum(MemoryType))
-    scope: Mapped[MemoryScope] = mapped_column(SAEnum(MemoryScope))
+    type: Mapped[MemoryType] = mapped_column(SAEnum(MemoryType), index=True)
+    scope: Mapped[MemoryScope] = mapped_column(SAEnum(MemoryScope), index=True)
     subject: Mapped[str]
     content: Mapped[str]
     structured_payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
@@ -111,7 +111,7 @@ class MemoryRecord(Base):
     superseded_by: Mapped[str | None] = mapped_column(default=None)
 
     status: Mapped[MemoryStatus] = mapped_column(
-        SAEnum(MemoryStatus), default=MemoryStatus.CANDIDATE
+        SAEnum(MemoryStatus), default=MemoryStatus.CANDIDATE, index=True
     )
     sensitivity: Mapped[str] = mapped_column(default="internal")
 

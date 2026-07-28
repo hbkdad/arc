@@ -72,7 +72,9 @@ class Task(Base):
 
     id: Mapped[str] = mapped_column(primary_key=True, default=_new_id)
     objective: Mapped[str]
-    status: Mapped[TaskStatus] = mapped_column(SAEnum(TaskStatus), default=TaskStatus.CREATED)
+    status: Mapped[TaskStatus] = mapped_column(
+        SAEnum(TaskStatus), default=TaskStatus.CREATED, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(default=_utcnow, onupdate=_utcnow)
 

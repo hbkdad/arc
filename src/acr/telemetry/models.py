@@ -28,7 +28,7 @@ class TelemetryEvent(Base):
     __tablename__ = "telemetry_events"
 
     id: Mapped[str] = mapped_column(primary_key=True, default=_new_id)
-    event_type: Mapped[str]
+    event_type: Mapped[str] = mapped_column(index=True)
     task_id: Mapped[str | None] = mapped_column(ForeignKey("tasks.id"), default=None)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
-    created_at: Mapped[datetime] = mapped_column(default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)

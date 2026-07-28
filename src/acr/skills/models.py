@@ -80,7 +80,7 @@ class SkillRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow)
 
     status: Mapped[SkillStatus] = mapped_column(
-        SAEnum(SkillStatus), default=SkillStatus.EXPERIMENTAL
+        SAEnum(SkillStatus), default=SkillStatus.EXPERIMENTAL, index=True
     )
     reliability: Mapped[float] = mapped_column(default=0.0)
     successful_uses: Mapped[int] = mapped_column(default=0)

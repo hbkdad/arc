@@ -30,6 +30,14 @@ def utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+def _as_aware(value: datetime) -> datetime:
+    """SQLite has no timezone-aware datetime type: a value written as UTC
+    comes back from a real round-trip through the database as naive. Treat a
+    naive value as UTC (everything this module writes is UTC) rather than
+    letting `datetime` subtraction/comparison raise."""
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
 class MemoryType(StrEnum):
     SEMANTIC = "semantic"
     EPISODIC = "episodic"
@@ -111,8 +119,8 @@ class MemoryRecord(Base):
     def is_current(self) -> bool:
         if self.status not in (MemoryStatus.CANDIDATE, MemoryStatus.CONFIRMED):
             return False
-        return self.valid_until is None or self.valid_until > utcnow()
+        return self.valid_until is None or _as_aware(self.valid_until) > utcnow()
 
     @property
     def freshness_days(self) -> float:
-        return (utcnow() - self.updated_at).total_seconds() / 86400
+        return (utcnow() - _as_aware(self.updated_at)).total_seconds() / 86400

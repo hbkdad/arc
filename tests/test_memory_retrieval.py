@@ -5,7 +5,7 @@ from __future__ import annotations
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from acr.memory import MemoryCandidate, MemoryScope, MemoryType
-from acr.memory.retrieval import estimate_tokens, retrieve
+from acr.memory.retrieval import _build_match_query, retrieve
 from acr.memory.write_controller import remember
 
 
@@ -23,9 +23,26 @@ async def _seed(session: AsyncSession, subject: str, content: str, **overrides: 
     await remember(session, MemoryCandidate(**defaults))  # type: ignore[arg-type]
 
 
-def test_estimate_tokens_is_roughly_length_over_four() -> None:
-    assert estimate_tokens("a" * 40) == 10
-    assert estimate_tokens("") == 1
+def test_build_match_query_ors_content_words_and_drops_stopwords() -> None:
+    assert _build_match_query("Explain the SQLite storage layer") == (
+        '"Explain" OR "SQLite" OR "storage" OR "layer"'
+    )
+
+
+def test_build_match_query_is_empty_for_stopwords_only() -> None:
+    assert _build_match_query("the a an") == ""
+
+
+async def test_retrieve_matches_a_sentence_query_via_or_semantics(
+    db_session: AsyncSession,
+) -> None:
+    await _seed(db_session, "acr.db", "ACR persists data in a local SQLite file.")
+    await _seed(db_session, "acr.ui", "The dashboard uses Next.js and React.")
+
+    results = await retrieve(db_session, query="Explain the SQLite storage layer")
+
+    assert len(results) == 1
+    assert "SQLite" in results[0].record.content
 
 
 async def test_retrieve_finds_matching_content_via_fts(db_session: AsyncSession) -> None:

@@ -1,8 +1,8 @@
 """ACR command-line interface (master spec §61).
 
-`doctor`, `version`, and `run` are implemented so far; the remaining
-subcommands (`task`, `status`, `memory`, `skills`, ...) land with the phases
-that give them something real to do.
+`doctor`, `version`, `run`, and `context compile` are implemented so far; the
+remaining subcommands (`task`, `status`, `memory`, `skills`, ...) land with
+the phases that give them something real to do.
 """
 
 from __future__ import annotations
@@ -13,6 +13,8 @@ import typer
 
 from acr import __version__
 from acr.config import get_settings
+from acr.context.compiler import compile_context
+from acr.context.models import ContextBundle
 from acr.core.execution import run_task
 from acr.core.tasks.models import Task, TaskStatus
 from acr.db.base import session_scope
@@ -22,6 +24,8 @@ from acr.providers.mock import MockProvider
 from acr.telemetry.recorder import TelemetryRecorder
 
 app = typer.Typer(name="acr", help="ACR — Adaptive Cognitive Runtime", no_args_is_help=True)
+context_app = typer.Typer(name="context", help="Context compiler operations.")
+app.add_typer(context_app)
 
 _STATUS_SYMBOL = {
     CheckStatus.OK: "[OK]  ",
@@ -85,6 +89,29 @@ def run(
 
     if task.status is TaskStatus.FAILED:
         raise typer.Exit(code=1)
+
+
+@context_app.command("compile")
+def context_compile(
+    objective: str = typer.Argument(..., help="Task objective to compile context for."),
+    budget: int = typer.Option(2000, "--budget", help="Token budget for the compiled bundle."),
+) -> None:
+    """Compile a context bundle from memory for a given objective."""
+    settings = get_settings()
+
+    async def _compile() -> ContextBundle:
+        async with session_scope(settings) as session:
+            bundle = await compile_context(session, task_objective=objective, token_budget=budget)
+            await session.commit()
+            return bundle
+
+    bundle = asyncio.run(_compile())
+    typer.echo(f"bundle: {len(bundle.items)} items, {bundle.total_tokens}/{budget} tokens")
+    for item in bundle.items:
+        typer.echo(
+            f"  [{item.source.value}] {item.id[:8]} relevance={item.relevance:.2f} "
+            f"tokens={item.token_cost} — {item.selection_reason}"
+        )
 
 
 if __name__ == "__main__":

@@ -12,9 +12,10 @@ A modular monorepo: `apps/` (api, dashboard, website, desktop), `packages/`
 `tools/`, `learning/`, `telemetry/`, `security/`), plus `benchmarks/`,
 `migrations/`, `tests/`, `scripts/`, `examples/`, `docs/`.
 
-## Current shape (Phase 0 Foundation + Phase 1 Execution + Phase 2 Memory)
+## Current shape (Phase 0 Foundation + Phase 1 Execution + Phase 2 Memory + Phase 3 Context)
 
-Only the Python CLI foundation, task engine, and memory system exist. See
+Only the Python CLI foundation, task engine, memory system, and context
+compiler exist. See
 [`docs/adr/0001-src-layout-single-package.md`](adr/0001-src-layout-single-package.md)
 for why this is one `src/acr/` package rather than the full multi-directory
 tree, and when to split it.
@@ -40,6 +41,7 @@ acrtest/
 │   ├── doctor.py          # health checks used by `acr doctor`
 │   ├── cli.py             # Typer app: `acr version`, `acr doctor`, `acr run`
 │   ├── core/
+│   │   ├── tokens.py              # shared estimate_tokens() — memory + context both use this
 │   │   ├── tasks/models.py       # Task, TaskRun, Step, TaskStatus + lifecycle rules
 │   │   └── execution/engine.py   # run_task(): drives a Task through a provider
 │   ├── providers/
@@ -49,12 +51,16 @@ acrtest/
 │   ├── telemetry/
 │   │   ├── models.py       # TelemetryEvent
 │   │   └── recorder.py     # TelemetryRecorder.emit() — DB + structured log
-│   └── memory/
-│       ├── models.py         # MemoryRecord + Type/Scope/Status enums
-│       ├── fts.py            # FTS5 virtual table + sync triggers (shared: migration + tests)
-│       ├── retrieval.py       # hybrid retrieval: FTS + metadata + ranking + token budget
-│       ├── temporal.py        # current() / at() / history()
-│       └── write_controller.py  # evaluate()/apply()/remember() decision policy
+│   ├── memory/
+│   │   ├── models.py         # MemoryRecord + Type/Scope/Status enums
+│   │   ├── fts.py            # FTS5 virtual table + sync triggers (shared: migration + tests)
+│   │   ├── retrieval.py       # hybrid retrieval: FTS + metadata + ranking + token budget
+│   │   ├── temporal.py        # current() / at() / history()
+│   │   └── write_controller.py  # evaluate()/apply()/remember() decision policy
+│   └── context/
+│       ├── models.py         # ContextItem, ContextBundle
+│       ├── compiler.py        # compile_context(): discover->...->assemble pipeline
+│       └── attribution.py     # record_attribution(): feeds usage back into memory utility
 ├── tests/
 │   ├── conftest.py         # isolated_env / settings / migrated_settings / db_session
 │   ├── test_config.py
@@ -63,10 +69,13 @@ acrtest/
 │   ├── test_task_lifecycle.py
 │   ├── test_providers.py
 │   ├── test_execution_engine.py
+│   ├── test_core_tokens.py
 │   ├── test_memory_models.py
 │   ├── test_memory_write_controller.py
 │   ├── test_memory_temporal.py
-│   └── test_memory_retrieval.py
+│   ├── test_memory_retrieval.py
+│   ├── test_context_compiler.py
+│   └── test_context_attribution.py
 └── docs/
     ├── ARCHITECTURE.md     # this file
     └── adr/0001-src-layout-single-package.md
@@ -140,12 +149,38 @@ deliberately not implemented — the Phase 2 milestone calls out "FTS
 retrieval", not semantic, and adding an embeddings model now would be
 infrastructure ahead of evidence it's needed.
 
+FTS5 `MATCH` ANDs bare terms by default, so `retrieve()` builds an OR-joined,
+quoted, stopword-filtered query (`_build_match_query` in `retrieval.py`) —
+passing a full natural-language task objective straight through as an
+implicit AND would only match content containing *every single word* of it.
+
+## Context compiler (Phase 3)
+
+`acr.context.compiler.compile_context()` runs the master §411-450 pipeline —
+DISCOVER (over-fetch from `memory.retrieve()`) -> FILTER/RANK (inherited from
+retrieval) -> DEDUPLICATE (by exact content) -> VALIDATE -> RESOLVE TEMPORAL
+CONFLICTS (a no-op today: retrieval already restricts to current records) ->
+EXPAND REQUIRED DEPENDENCIES (a no-op: no dependency graph exists yet) ->
+COMPRESS (deterministic truncation past 2000 chars, no LLM) -> ESTIMATE
+TOKENS (`acr.core.tokens`) -> OPTIMIZE (greedy knapsack by relevance/token) ->
+ASSEMBLE into a `ContextBundle`. Memory is the only real context source;
+`selected_skills`/`selected_tools`/`selected_code`/`selected_documents` are
+real fields on the bundle that stay empty until Phases 4-6/13 exist.
+
+`acr.context.attribution.record_attribution()` closes the loop master §463
+asks for: given which bundle item IDs a task actually used, it increments
+each source record's `successful_uses`/`failed_uses` and recomputes
+`utility_score` — which is exactly what `retrieval.retrieve()`'s ranking
+already reads. Items that were offered but not used are left untouched
+(§464-465: not used ≠ useless).
+
 ## Commands available today
 
 ```bash
-uv run acr doctor          # Python version, data dir, DB, mock + Ollama providers
+uv run acr doctor              # Python version, data dir, DB, mock + Ollama providers
 uv run acr version
-uv run acr run "objective" # create + execute a Task end-to-end via the mock provider
+uv run acr run "objective"     # create + execute a Task end-to-end via the mock provider
+uv run acr context compile "objective" --budget 2000  # compile + print a ContextBundle
 uv run alembic upgrade head
 uv run pytest
 uv run ruff check .
@@ -153,11 +188,11 @@ uv run ruff format --check .
 uv run pyright
 ```
 
-Memory read/write is library-level only so far (`acr.memory.*`) — no CLI
-verbs yet (`acr memory ...` lands when the CLI needs them, e.g. once Phase 3's
-context compiler consumes retrieval).
+Memory *writing* is still library-level only (`acr.memory.write_controller`)
+— no `acr memory remember ...` CLI verb yet; it lands when something needs
+to write memory from outside a test, e.g. experience distillation (Phase 8).
 
 ## Next milestone
 
-Phase 3 — Context: context compiler, token estimator, ranking, attribution,
-compression (master §411-472).
+Phase 4 — Skills: skill format, registry, search, routing, manual activation
+(master §645-696).

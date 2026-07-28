@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -221,3 +222,53 @@ def test_security_audit_shows_a_real_recorded_event(migrated_settings: Settings)
     assert audit_result.exit_code == 0
     assert "tool.invoke:memory_search" in audit_result.stdout
     assert "granted" in audit_result.stdout
+
+
+def test_learn_distill_reports_unknown_task_cleanly(migrated_settings: Settings) -> None:
+    result = runner.invoke(app, ["learn", "distill", "does-not-exist"])
+    assert result.exit_code == 1
+    assert "unknown task" in result.stdout
+
+
+def test_learn_distill_and_promote_end_to_end(migrated_settings: Settings) -> None:
+    run_result = runner.invoke(app, ["run", "say hello"])
+    assert run_result.exit_code == 0
+    match = re.search(r"^task (\S+) ->", run_result.stdout, re.MULTILINE)
+    assert match is not None
+    task_id = match.group(1)
+
+    distill_result = runner.invoke(app, ["learn", "distill", task_id])
+    assert distill_result.exit_code == 0
+    assert "distilled" in distill_result.stdout
+    assert "write decision" in distill_result.stdout
+
+    # Fresh candidate has 0 successful_uses, so a strict promote finds nothing.
+    promote_result = runner.invoke(app, ["learn", "promote"])
+    assert promote_result.exit_code == 0
+    assert "promoted 0 of" in promote_result.stdout
+
+    # A permissive threshold promotes it even with zero recorded uses.
+    lenient_result = runner.invoke(
+        app, ["learn", "promote", "--min-utility", "0", "--min-successful-uses", "0"]
+    )
+    assert lenient_result.exit_code == 0
+    assert "promoted 1 of" in lenient_result.stdout
+
+
+def test_learn_generate_skills_reports_nothing_with_no_repeats(
+    migrated_settings: Settings,
+) -> None:
+    result = runner.invoke(app, ["learn", "generate-skills"])
+    assert result.exit_code == 0
+    assert "no repeated successful objectives" in result.stdout
+
+
+def test_learn_generate_skills_generates_a_quarantined_skill(migrated_settings: Settings) -> None:
+    for _ in range(3):
+        result = runner.invoke(app, ["run", "repeat this task"])
+        assert result.exit_code == 0
+
+    result = runner.invoke(app, ["learn", "generate-skills", "--min-repeats", "3"])
+    assert result.exit_code == 0
+    assert "quarantined" in result.stdout
+    assert "repeat this task" in result.stdout

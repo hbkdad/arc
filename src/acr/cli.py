@@ -31,7 +31,15 @@ from acr.evaluation.waste_analyzer import (
     analyze_context_utilization,
     find_duplicate_memories,
 )
+from acr.learning.distillation import DistillationResult, TaskNotFoundError, distill_and_remember
+from acr.learning.promotion import PromotionReport, promote_candidates
+from acr.learning.skill_generation import (
+    RepeatedPattern,
+    detect_repeated_successes,
+    generate_candidate_skill,
+)
 from acr.logging import configure_logging, get_logger
+from acr.memory.write_controller import WriteEvaluation
 from acr.providers.base import CompletionRequest
 from acr.providers.mock import MockProvider
 from acr.routing.models import ModelProfile, RoutedCompletion, build_default_router
@@ -59,10 +67,12 @@ waste_app = typer.Typer(name="waste", help="Token waste analysis.")
 models_app = typer.Typer(name="models", help="Model routing.")
 tools_app = typer.Typer(name="tools", help="Tool registry operations.")
 security_app = typer.Typer(name="security", help="Security: audit log, injection scanning.")
+learn_app = typer.Typer(name="learn", help="Experience distillation, promotion, skill generation.")
 app.add_typer(context_app)
 app.add_typer(skills_app)
 app.add_typer(benchmark_app)
 app.add_typer(waste_app)
+app.add_typer(learn_app)
 app.add_typer(models_app)
 app.add_typer(tools_app)
 app.add_typer(security_app)
@@ -482,6 +492,82 @@ def security_scan(
         typer.echo("clean: no known injection patterns matched")
         return
     typer.echo(f"suspicious: matched {', '.join(result.matched_patterns)}")
+
+
+@learn_app.command("distill")
+def learn_distill(
+    task_id: str = typer.Argument(..., help="Id of a completed task to distill."),
+) -> None:
+    """Distill one task's raw trace into a memory candidate (master §631-644)."""
+    settings = get_settings()
+
+    async def _distill() -> tuple[DistillationResult, WriteEvaluation | None]:
+        async with session_scope(settings) as session:
+            result, evaluation = await distill_and_remember(session, task_id)
+            await session.commit()
+            return result, evaluation
+
+    try:
+        result, evaluation = asyncio.run(_distill())
+    except TaskNotFoundError as exc:
+        typer.echo(f"unknown task: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(
+        f"{result.reason}: {result.raw_trace_bytes}B raw -> {result.distilled_bytes}B distilled "
+        f"(ratio {result.compression_ratio:.1f}x)"
+    )
+    if evaluation is not None:
+        typer.echo(f"write decision: {evaluation.decision.value} ({evaluation.reason})")
+
+
+@learn_app.command("promote")
+def learn_promote(
+    min_utility: float = typer.Option(0.7, "--min-utility"),
+    min_successful_uses: int = typer.Option(3, "--min-successful-uses"),
+) -> None:
+    """Promote sufficiently-useful candidate memories to confirmed (master §592-601)."""
+    settings = get_settings()
+
+    async def _promote() -> PromotionReport:
+        async with session_scope(settings) as session:
+            report = await promote_candidates(
+                session, min_utility=min_utility, min_successful_uses=min_successful_uses
+            )
+            await session.commit()
+            return report
+
+    report = asyncio.run(_promote())
+    typer.echo(f"promoted {len(report.promoted)} of {report.considered} candidates considered")
+    for record in report.promoted:
+        typer.echo(f"  {record.id}\t{record.subject}")
+
+
+@learn_app.command("generate-skills")
+def learn_generate_skills(
+    min_repeats: int = typer.Option(3, "--min-repeats"),
+) -> None:
+    """Generate quarantined candidate skills from repeated successful task objectives."""
+    settings = get_settings()
+
+    async def _generate() -> list[tuple[RepeatedPattern, SkillRecord]]:
+        async with session_scope(settings) as session:
+            patterns = await detect_repeated_successes(session, min_repeats=min_repeats)
+            generated = [
+                (pattern, await generate_candidate_skill(session, settings.data_dir, pattern))
+                for pattern in patterns
+            ]
+            await session.commit()
+            return generated
+
+    generated = asyncio.run(_generate())
+    if not generated:
+        typer.echo("no repeated successful objectives found")
+        return
+    for pattern, record in generated:
+        typer.echo(
+            f"{record.id}\t{record.status.value}\t{pattern.occurrences}x\t{pattern.objective}"
+        )
 
 
 if __name__ == "__main__":

@@ -12,11 +12,11 @@ A modular monorepo: `apps/` (api, dashboard, website, desktop), `packages/`
 `tools/`, `learning/`, `telemetry/`, `security/`), plus `benchmarks/`,
 `migrations/`, `tests/`, `scripts/`, `examples/`, `docs/`.
 
-## Current shape (Phase 0 Foundation + Phase 1 Execution + Phase 2 Memory + Phase 3 Context + Phase 4 Skills + Phase 5 Evaluation + Phase 6 Routing + Phase 7 Security)
+## Current shape (Phase 0 Foundation + Phase 1 Execution + Phase 2 Memory + Phase 3 Context + Phase 4 Skills + Phase 5 Evaluation + Phase 6 Routing + Phase 7 Security + Phase 8 Learning)
 
 Only the Python CLI foundation, task engine, memory system, context compiler,
-skill system, evaluation system, model/tool routing, and security layer
-exist. See
+skill system, evaluation system, model/tool routing, security layer, and
+learning system exist. See
 [`docs/adr/0001-src-layout-single-package.md`](adr/0001-src-layout-single-package.md)
 for why this is one `src/acr/` package rather than the full multi-directory
 tree, and when to split it.
@@ -92,14 +92,19 @@ acrtest/
 │   │   ├── default_tools.py    # real tools: memory_search, skill_search
 │   │   ├── exposure.py         # expose_tools(): task-specific subset, min-relevance gated
 │   │   └── invocation.py       # invoke_tool(): permission + safe-mode check, audit-logged
-│   └── security/
-│       ├── permissions.py     # Capability enum, default-deny PermissionSet
-│       ├── trust.py            # TrustLevel, combine_trust() (minimum of the chain)
-│       ├── injection.py        # scan_for_injection(): deterministic heuristic scanner
-│       ├── secrets.py          # redact_secrets()/redact_mapping() — wired into telemetry
-│       ├── sandbox.py          # SandboxPolicy, build_sandboxed_env() (env allowlist + redact)
-│       ├── safe_mode.py        # SafeModeError, require_not_safe_mode()
-│       └── audit.py            # record_audit_event()/recent_audit_events() (via telemetry)
+│   ├── security/
+│   │   ├── permissions.py     # Capability enum, default-deny PermissionSet
+│   │   ├── trust.py            # TrustLevel, combine_trust() (minimum of the chain)
+│   │   ├── injection.py        # scan_for_injection(): deterministic heuristic scanner
+│   │   ├── secrets.py          # redact_secrets()/redact_mapping() — wired into telemetry
+│   │   ├── sandbox.py          # SandboxPolicy, build_sandboxed_env() (env allowlist + redact)
+│   │   ├── safe_mode.py        # SafeModeError, require_not_safe_mode()
+│   │   └── audit.py            # record_audit_event()/recent_audit_events() (via telemetry)
+│   └── learning/
+│       ├── distillation.py     # distill_task()/distill_and_remember(): trace -> memory candidate
+│       ├── utility.py          # record_skill_outcome(): SkillRecord successful_uses/reliability
+│       ├── promotion.py        # promote_candidates(): CANDIDATE -> CONFIRMED on earned utility
+│       └── skill_generation.py # detect_repeated_successes()/generate_candidate_skill()
 ├── tests/
 │   ├── fixtures/skills/       # sqlite-diagnostics (valid), broken-skill (invalid manifest)
 │   ├── conftest.py         # isolated_env / settings / migrated_settings / db_session
@@ -135,7 +140,11 @@ acrtest/
 │   ├── test_security_sandbox.py
 │   ├── test_security_safe_mode.py
 │   ├── test_security_audit.py
-│   └── test_tools_invocation.py
+│   ├── test_tools_invocation.py
+│   ├── test_learning_distillation.py
+│   ├── test_learning_utility.py
+│   ├── test_learning_promotion.py
+│   └── test_learning_skill_generation.py
 └── docs/
     ├── ARCHITECTURE.md     # this file
     └── adr/0001-src-layout-single-package.md
@@ -362,6 +371,46 @@ checks both a tool's declared `permissions` against the caller's grants and
 (for non-`READ_ONLY` tools) safe mode, audit-logging every call — granted
 or denied.
 
+## Learning (Phase 8)
+
+`acr.learning.distillation.distill_task()` converts one completed Task's
+raw trace (its `TaskRun`s and `Step`s — Phase 1) into a compact `episodic`
+memory candidate, reporting the compression ratio achieved (master §644).
+Raw traces are never touched or duplicated — they stay exactly where Phase
+1 put them (`tasks`/`task_runs`/`steps`), "outside normal context" (§642):
+the context compiler (Phase 3) only ever reads `memory_records`. A task
+that didn't complete yields no candidate — a "lesson" from an unfinished
+task would be exactly the unevidenced claim master principle #22 forbids.
+`distill_and_remember()` hands the candidate to the write controller
+(Phase 2) rather than granting itself confirmed memory.
+
+`acr.learning.utility.record_skill_outcome()` closes a real Phase 4 gap:
+`SkillRecord.successful_uses`/`failed_uses`/`reliability` existed as
+columns from the start, but nothing ever wrote to them, so
+`routing.route()`'s "check prior performance" step always saw `0.0`. This
+mirrors the same pattern `context.attribution` already established for
+memory.
+
+`acr.learning.promotion.promote_candidates()` is master §592-601's
+"promote useful patterns": a `CANDIDATE` memory graduates to `CONFIRMED`
+once `utility_score` and `successful_uses` (both already maintained by
+`context.attribution`) clear configurable thresholds. Promotion also raises
+the record's trust level — Phase 7's `memory_trust_level()` maps
+`CONFIRMED` to `VERIFIED_MEMORY` — so this is the actual mechanism by which
+a memory earns higher trust over time, not just a status flip.
+
+`acr.learning.skill_generation` implements master §697-716: detects task
+objectives that have completed successfully at least `min_repeats` times
+(`detect_repeated_successes()`), then `generate_candidate_skill()` writes a
+*real* `SKILL.yaml` package under `<data_dir>/generated_skills/<id>/`,
+registers it through the normal `acr.skills.registry.register()` path, and
+explicitly quarantines it (master §704: "Generated skills begin in
+quarantine") — never active, never trusted until Phase 9's validation
+pipeline exists. Generation is idempotent and safe to re-run: it never
+re-quarantines a skill that a human has already reviewed and activated (a
+real bug this phase's own tests caught — the naive version crashed trying
+to re-transition an already-quarantined skill on a second run).
+
 ## Commands available today
 
 ```bash
@@ -386,6 +435,9 @@ uv run acr tools invoke <name> --query "..." [--limit N]   # permission + safe-m
 uv run acr safe-mode                       # show whether ACR_SAFE_MODE is on
 uv run acr security scan "text"            # prompt-injection heuristic scanner
 uv run acr security audit [--limit N]      # recent audit events
+uv run acr learn distill <task-id>         # trace -> compact memory candidate
+uv run acr learn promote [--min-utility N --min-successful-uses N]
+uv run acr learn generate-skills [--min-repeats N]
 uv run alembic upgrade head
 uv run pytest
 uv run ruff check .
@@ -393,11 +445,11 @@ uv run ruff format --check .
 uv run pyright
 ```
 
-Memory *writing* is still library-level only (`acr.memory.write_controller`)
-— no `acr memory remember ...` CLI verb yet; it lands when something needs
-to write memory from outside a test, e.g. experience distillation (Phase 8).
+Memory *writing* is still library-level only (`acr.memory.write_controller`,
+plus `acr.learning.distillation` as a real caller) — no
+`acr memory remember ...` CLI verb for arbitrary facts yet.
 
 ## Next milestone
 
-Phase 8 — Learning: experience distiller, utility updates, candidate memory
-promotion, candidate skill generation (master §631-644, §697-716).
+Phase 9 — Skill Evolution: validation, benchmarking, version comparison,
+rollback (master §717-746).

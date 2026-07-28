@@ -38,25 +38,26 @@ acrtest/
 ├── .github/workflows/ci.yml  # ruff + pyright + migrations + pytest, every push/PR
 ├── pyproject.toml         # uv project: deps, ruff, pyright, pytest config
 ├── uv.lock
-├── alembic.ini
-├── migrations/            # Alembic (async), env.py reads acr.config.Settings
-│   ├── env.py
-│   └── versions/
-│       ├── 0dd629888bfd_baseline.py
-│       ├── 87b619c4e7ac_task_engine_and_telemetry_tables.py
-│       ├── 6c384104b66a_memory_records_and_fts5.py
-│       ├── 83b4d32aa8f2_skills_registry_and_fts5.py
-│       ├── 5a8d4f37fff6_benchmark_runs.py
-│       ├── 90f73bb6afb3_agent_topology_records.py
-│       ├── ac998e062cab_hot_path_indexes.py
-│       └── f0aa4f554248_self_improvement_proposals.py
+├── alembic.ini             # script_location = src/acr/migrations (dev/source-checkout path)
 ├── src/acr/
 │   ├── __init__.py        # __version__
 │   ├── config.py          # Settings (pydantic-settings, ACR_* env / .env)
 │   ├── logging.py         # structlog JSON/console setup
+│   ├── migrations/        # Alembic (async) -- lives *inside* the package so it ships
+│   │   ├── env.py         # in the wheel; alembic.ini points here for the dev path too
+│   │   └── versions/
+│   │       ├── 0dd629888bfd_baseline.py
+│   │       ├── 87b619c4e7ac_task_engine_and_telemetry_tables.py
+│   │       ├── 6c384104b66a_memory_records_and_fts5.py
+│   │       ├── 83b4d32aa8f2_skills_registry_and_fts5.py
+│   │       ├── 5a8d4f37fff6_benchmark_runs.py
+│   │       ├── 90f73bb6afb3_agent_topology_records.py
+│   │       ├── ac998e062cab_hot_path_indexes.py
+│   │       └── f0aa4f554248_self_improvement_proposals.py
 │   ├── db/
 │   │   ├── __init__.py
-│   │   └── base.py        # async SQLAlchemy engine/session, Base
+│   │   ├── base.py        # async SQLAlchemy engine/session, Base
+│   │   └── migrate.py     # upgrade_to_head(): programmatic Alembic, no alembic.ini needed
 │   ├── doctor.py          # health checks used by `acr doctor`
 │   ├── cli.py             # Typer app: version/doctor/run/context/skills
 │   ├── core/
@@ -871,7 +872,8 @@ uv run acr improve propose-skill-evolution <baseline-id> <candidate-id>
 uv run acr improve list [--status pending|approved|rejected|auto_applied]
 uv run acr improve approve <proposal-id>
 uv run acr improve reject <proposal-id>
-uv run alembic upgrade head
+uv run alembic upgrade head    # dev path (reads alembic.ini)
+uv run acr db upgrade          # same result, also works from a pip/uv-tool install
 uv run pytest
 uv run ruff check .
 uv run ruff format --check .
@@ -949,6 +951,37 @@ without the person opening it explicitly consenting. Manually verified
 the exact spawned command (`uv run acr mcp serve` under stdio, EOF on
 stdin) starts and exits cleanly before committing.
 
+## PyPI packaging groundwork
+
+Not published yet (needs a PyPI account/token from the user — a distinct
+action, not assumed here), but the package now builds and actually works
+standalone, which a real `uv build` + install test caught two gaps in:
+
+- `pyproject.toml` gained the metadata a real PyPI listing needs:
+  `authors`, `keywords`, `classifiers` (honestly "Development Status :: 3
+  - Alpha", not overclaiming maturity), and `[project.urls]` pointing at
+  the real repo/issues/docs. No `License :: OSI Approved :: MIT License`
+  classifier — redundant and deprecated per PEP 639 once `license =
+  "MIT"` is set; `uv build` itself warns about the combination.
+- **Real bug found by actually building and installing the wheel**, not
+  just reading the config: `migrations/` lived at the repo root, outside
+  `src/acr/`, so it was never bundled — a `pip install acr` user would
+  have the CLI but no way to create the database schema at all.
+  Fixed by moving it to `src/acr/migrations/` (now ships in the wheel;
+  `alembic.ini`'s `script_location` updated to match, so the dev/source
+  workflow — `uv run alembic upgrade head` — is unaffected) and adding
+  `acr.db.migrate.upgrade_to_head()` + `acr db upgrade`: a programmatic
+  Alembic runner that builds its own `Config` pointing at the bundled
+  migrations directory, needing no `alembic.ini` on disk at all. Both
+  paths execute the identical `migrations/env.py`, so behavior can't
+  diverge between a dev checkout and an installed package.
+- Verified for real, not just asserted: built the wheel, `uv pip
+  install`ed it into a throwaway venv, `cd`'d to an unrelated directory
+  with no repo, no `alembic.ini`, nothing but the installed package, and
+  ran `acr db upgrade` (created a real schema from scratch),
+  `acr doctor`, and `acr run "..."` end-to-end — all worked identically
+  to the source-checkout experience.
+
 ## What's left
 
 Every phase in the master spec's 15-phase list (§65-66) now has a
@@ -959,8 +992,10 @@ deferred gaps, each with a reason rather than an oversight:
 - **Desktop app** (Phase 13, Tauri) — deliberately deferred per explicit
   user decision; large enough to deserve its own scoping conversation
   (target platforms, UI approach) whenever it's picked up.
-- **PyPI package / "downloads"** (Phase 14) — no package published; needs
-  its own account/credentials, not assumed here.
+- **PyPI package / "downloads"** (Phase 14) — packaging groundwork done
+  and verified working (build + install + run end-to-end in an isolated
+  environment — see "PyPI packaging groundwork" above); actually
+  publishing needs a PyPI account/token from the user, not assumed here.
 - **Bespoke Claude Code / Codex MCP client config** (Phase 13) — half
   done. `.mcp.json` at the repo root registers `acr mcp serve` as a
   project-scoped MCP server for Claude Code specifically (format

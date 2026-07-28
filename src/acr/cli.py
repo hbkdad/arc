@@ -28,6 +28,7 @@ from acr.core.execution import run_task
 from acr.core.tasks.models import Task, TaskStatus
 from acr.dashboard.app import create_app as create_dashboard_app
 from acr.db.base import session_scope
+from acr.db.migrate import upgrade_to_head
 from acr.doctor import CheckStatus, run_checks
 from acr.evaluation.evaluators import ExactMatchEvaluator
 from acr.evaluation.regression import RegressionReport, detect_regression
@@ -106,6 +107,7 @@ agents_app = typer.Typer(name="agents", help="Agent planning, spawning, review, 
 dashboard_app = typer.Typer(name="dashboard", help="Operational dashboard.")
 mcp_app = typer.Typer(name="mcp", help="MCP server exposure.")
 improve_app = typer.Typer(name="improve", help="Controlled self-improvement proposals.")
+db_app = typer.Typer(name="db", help="Database schema management.")
 app.add_typer(context_app)
 app.add_typer(skills_app)
 app.add_typer(benchmark_app)
@@ -118,6 +120,7 @@ app.add_typer(agents_app)
 app.add_typer(dashboard_app)
 app.add_typer(mcp_app)
 app.add_typer(improve_app)
+app.add_typer(db_app)
 
 # Every registered benchmark suite: name -> (seed, build_cases). Only one
 # exists today (master principle #23: no feature expansion without
@@ -1030,6 +1033,22 @@ def mcp_serve(
     server = create_mcp_server(settings)
     kwargs = {} if transport == "stdio" else {"host": host, "port": port}
     server.run(transport=transport, **kwargs)  # type: ignore[arg-type]
+
+
+@db_app.command("upgrade")
+def db_upgrade() -> None:
+    """Apply all pending schema migrations.
+
+    Unlike `uv run alembic upgrade head` (which needs the repo's
+    alembic.ini and is the dev/source-checkout path), this works from a
+    plain `pip install acr`/`uv tool install acr` too -- no alembic.ini
+    required, since the migrations themselves ship inside the installed
+    package (see acr.db.migrate).
+    """
+    settings = get_settings()
+    settings.ensure_data_dir()
+    upgrade_to_head()
+    typer.echo(f"database upgraded to head: {settings.database_path}")
 
 
 def _echo_proposal(p: Proposal) -> None:

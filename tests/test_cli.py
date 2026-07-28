@@ -41,6 +41,21 @@ def test_doctor_command_succeeds_in_isolated_env(
     get_settings.cache_clear()
 
 
+def test_db_upgrade_applies_migrations_from_scratch(settings: Settings) -> None:
+    # Deliberately uses `settings`, not `migrated_settings` -- the whole
+    # point is proving `acr db upgrade` creates a real schema via Alembic
+    # (using the migrations bundled inside the package, no alembic.ini)
+    # rather than relying on the test fixture's own
+    # Base.metadata.create_all() shortcut.
+    assert not settings.database_path.exists()
+
+    result = runner.invoke(app, ["db", "upgrade"])
+
+    assert result.exit_code == 0
+    assert "database upgraded to head" in result.stdout
+    assert settings.database_path.is_file()
+
+
 def test_run_command_creates_and_completes_task(migrated_settings: Settings) -> None:
     result = runner.invoke(app, ["run", "hello there"])
 

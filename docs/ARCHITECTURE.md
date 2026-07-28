@@ -12,13 +12,18 @@ A modular monorepo: `apps/` (api, dashboard, website, desktop), `packages/`
 `tools/`, `learning/`, `telemetry/`, `security/`), plus `benchmarks/`,
 `migrations/`, `tests/`, `scripts/`, `examples/`, `docs/`.
 
-## Current shape (Phase 0 Foundation + Phase 1 Execution + Phase 2 Memory + Phase 3 Context + Phase 4 Skills + Phase 5 Evaluation + Phase 6 Routing + Phase 7 Security + Phase 8 Learning + Phase 9 Skill Evolution + Phase 10 Agents + Phase 11 Dashboard + Phase 12 Visualization + Phase 13 Integrations + Phase 14 Public Launch baseline)
+## Current shape (all 15 master-spec phases: Phase 0 Foundation through Phase 15 Controlled Self-Improvement)
 
-Only the Python CLI foundation, task engine, memory system, context compiler,
-skill system, evaluation system, model/tool routing, security layer,
-learning system, skill validation/evolution, agents, the operational
-dashboard, a real-telemetry visualization, an MCP server, web-fetch/
-browser/GitHub-search tools, and baseline OSS repo hygiene exist. See
+Every phase in the master spec's §65-66 milestone list now has at least a
+smallest-complete-vertical-slice implementation: task engine, memory
+system, context compiler, skill system, evaluation system, model/tool
+routing, security layer, learning system, skill validation/evolution,
+agents, the operational dashboard, a real-telemetry visualization, an MCP
+server, web-fetch/browser/GitHub-search tools, baseline OSS repo hygiene,
+and controlled self-improvement proposals. This does **not** mean the
+system is "done" — see each phase's section below for exactly what's
+real versus deliberately deferred (a desktop app, a PyPI package, and
+several Phase 15 sub-bullets remain explicitly out of scope). See
 [`docs/adr/0001-src-layout-single-package.md`](adr/0001-src-layout-single-package.md)
 for why this is one `src/acr/` package rather than the full multi-directory
 tree, and when to split it.
@@ -41,7 +46,8 @@ acrtest/
 │       ├── 83b4d32aa8f2_skills_registry_and_fts5.py
 │       ├── 5a8d4f37fff6_benchmark_runs.py
 │       ├── 90f73bb6afb3_agent_topology_records.py
-│       └── ac998e062cab_hot_path_indexes.py
+│       ├── ac998e062cab_hot_path_indexes.py
+│       └── f0aa4f554248_self_improvement_proposals.py
 ├── src/acr/
 │   ├── __init__.py        # __version__
 │   ├── config.py          # Settings (pydantic-settings, ACR_* env / .env)
@@ -117,7 +123,8 @@ acrtest/
 │   │   ├── distillation.py     # distill_task()/distill_and_remember(): trace -> memory candidate
 │   │   ├── utility.py          # record_skill_outcome(): SkillRecord successful_uses/reliability
 │   │   ├── promotion.py        # promote_candidates(): CANDIDATE -> CONFIRMED on earned utility
-│   │   └── skill_generation.py # detect_repeated_successes()/generate_candidate_skill()
+│   │   ├── skill_generation.py # detect_repeated_successes()/generate_candidate_skill()
+│   │   └── proposals.py        # Proposal: evidence-backed, approval-gated self-improvement
 │   ├── agents/
 │   │   ├── models.py           # AgentSpec (master §749-763 field set), SpawnEstimate
 │   │   ├── factory.py          # estimate_spawn()/spawn_agent(): cost/value gate, runs via run_task()
@@ -172,6 +179,7 @@ acrtest/
 │   ├── test_learning_utility.py
 │   ├── test_learning_promotion.py
 │   ├── test_learning_skill_generation.py
+│   ├── test_learning_proposals.py
 │   ├── test_skill_validation.py
 │   ├── test_skill_evolution.py
 │   ├── test_agents_factory.py
@@ -754,6 +762,68 @@ reinterpreted).
   publishing one is a distinct action needing its own credentials/account,
   not assumed here.
 
+## Controlled self-improvement (Phase 15, final master-spec phase)
+
+Master §1721-1727 lists experiments, strategy optimization, skill
+evolution, routing optimization, and autonomous proposals under one
+phase. "Skill evolution" already existed (Phase 9); this phase's real
+contribution is the "controlled...autonomous proposals" part — the
+gate every self-improvement action goes through — applied to that one
+existing mechanism. Explicit user framing for this phase: guardrails, yes,
+but the system should genuinely be able to improve itself "for the design
+and intent it was given" — not artificially hobbled beyond what's needed
+for safety.
+
+`acr.learning.proposals.Proposal` is the gate itself: evidence (right now,
+Phase 9's `EvolutionComparison`) plus a recommendation, persisted, never
+an applied change by itself. `propose_skill_evolution()` only ever creates
+a proposal when `compare_versions()` actually recommends promotion —
+there's no "propose a regression and let the human veto it" path; a
+non-improvement isn't a rejected proposal, it's simply not evidence of
+anything to propose (`propose_skill_evolution()` returns `None`, not a
+`Proposal`, in that case — same "never publish a result the evidence
+doesn't support" reasoning as every prior phase's evaluation code).
+
+Two settings implement the guardrails, both explicit user decisions:
+- `Settings.self_improvement_enabled` (`ACR_SELF_IMPROVEMENT_ENABLED`,
+  **on** by default) — the master kill switch. `propose_skill_evolution()`
+  refuses outright when this is off.
+- `Settings.auto_apply_proposals` (`ACR_AUTO_APPLY_PROPOSALS`, **off** by
+  default) — proposals require explicit human approval
+  (`acr improve approve <id>`) before taking effect unless this is turned
+  on, in which case a recommended proposal applies itself immediately
+  (status `auto_applied` rather than `pending`). Off-by-default was the
+  explicit choice: approval-gated is the safe default, autonomous
+  application is the opt-in escape hatch, never the other way around.
+
+Scope boundary, also explicit user intent ("for the design and intent it
+was given," not unboundedly): a proposal can only ever invoke a mechanism
+this codebase already exposes as a reviewable, gated operation
+(`acr.skills.evolution.promote_evolution`, itself safe-mode-aware via
+`set_status()`). There is no proposal kind — and none is planned — that
+edits ACR's own source code, dependencies, or permission grants; those
+stay entirely outside what "self-improvement" means in this system. Every
+proposal decision (create/approve/reject/auto-apply) is audit-logged the
+same way every other mutating operation in ACR is (Phase 7's
+`record_audit_event()`).
+
+`acr improve propose-skill-evolution/list/approve/reject` on the CLI; a
+read-only `/proposals` dashboard view (Phase 11's pattern — reuses
+`list_proposals()` directly, no duplicated query logic) shows current
+settings and proposal history, with approve/reject staying CLI-only
+(the dashboard has no form/write path anywhere, by design).
+
+**Deliberately not built** in this slice — real gaps, not oversights: a
+second proposal kind for anything beyond skill evolution (routing
+threshold tuning, "strategy optimization," an "experiments" runner)
+would need its own evidence source before it could honestly propose
+anything, and none of those evidence sources exist yet. Building the
+proposal *mechanism* generically (this phase) before inventing more
+evidence sources to plug into it (future phases, only once something
+concrete needs them) is the same "smallest complete vertical slice,
+no speculative infrastructure" discipline every phase in this repo has
+followed.
+
 ## Commands available today
 
 ```bash
@@ -794,6 +864,10 @@ uv run acr agents spawn "objective" [--force]               # estimate -> run_ta
 uv run acr agents topology <task-class>                     # evidence-gated worker-count recommendation
 uv run acr dashboard serve [--host --port]   # dashboard + /visualization: http://127.0.0.1:8765
 uv run acr mcp serve [--transport stdio|sse|streamable-http] [--host --port]
+uv run acr improve propose-skill-evolution <baseline-id> <candidate-id>
+uv run acr improve list [--status pending|approved|rejected|auto_applied]
+uv run acr improve approve <proposal-id>
+uv run acr improve reject <proposal-id>
 uv run alembic upgrade head
 uv run pytest
 uv run ruff check .
@@ -805,16 +879,36 @@ Memory *writing* is still library-level only (`acr.memory.write_controller`,
 plus `acr.learning.distillation` as a real caller) — no
 `acr memory remember ...` CLI verb for arbitrary facts yet.
 
-## Next milestone
+## What's left
 
-Phase 13 is functionally complete (MCP server, web-fetch, real browser
-automation, read-only GitHub search — see "Integrations" above); desktop
-app (Tauri) deliberately deferred per explicit user decision, large enough
-to deserve its own scoping conversation whenever it's picked up. Phase 14
-baseline OSS hygiene is done (see "Public launch baseline" above) — no
-PyPI package/"downloads" yet, that needs its own credentials/account.
+Every phase in the master spec's 15-phase list (§65-66) now has a
+smallest-complete-vertical-slice implementation — this is not the same
+claim as "the master spec is fully implemented." Real, explicitly
+deferred gaps, each with a reason rather than an oversight:
 
-Next: Phase 15 — Controlled Self-Improvement: experiments, strategy
-optimization, skill evolution (builds on Phase 9's evolution pipeline),
-routing optimization, autonomous proposals (master §1721-1727). This is
-the last phase in the master spec's 15-phase list.
+- **Desktop app** (Phase 13, Tauri) — deliberately deferred per explicit
+  user decision; large enough to deserve its own scoping conversation
+  (target platforms, UI approach) whenever it's picked up.
+- **PyPI package / "downloads"** (Phase 14) — no package published; needs
+  its own account/credentials, not assumed here.
+- **Bespoke Claude Code / Codex MCP client config** (Phase 13) — the
+  generic MCP server (`acr mcp serve`) already works with either; no
+  per-client config file built since their exact current formats weren't
+  verified and shouldn't be guessed at.
+- **Additional self-improvement proposal kinds** (Phase 15) — "strategy
+  optimization," "routing optimization," and a general "experiments"
+  runner all need their own evidence sources before they could honestly
+  propose anything; none of those evidence sources exist yet. The
+  `Proposal` mechanism itself is generic (see "Controlled
+  self-improvement" above) — a second proposal kind is a matter of
+  writing a new evidence-producing comparison and an `_apply()` branch,
+  not a redesign.
+- **Real Ollama/cloud provider usage** — `MockProvider` is the default
+  everywhere (CLI `run`, MCP `run_task`); `OllamaProvider` and the cloud
+  adapters exist and are tested but nothing routes to them by default.
+
+None of the above are "next up" in a committed sequence — they're each a
+real, scoped decision waiting on the user (credentials, an account, a
+priority call), consistent with the pattern the whole build has followed:
+build the smallest real slice of what's asked, name what's deliberately
+not built, and never guess at the parts that need someone's actual say-so.

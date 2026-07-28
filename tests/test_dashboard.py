@@ -162,6 +162,43 @@ async def test_benchmarks_page_lists_recent_runs(
     assert memory_recall.SUITE_NAME in response.text
 
 
+async def test_proposals_page_lists_a_real_proposal(
+    migrated_settings: Settings, db_session: AsyncSession, tmp_path: Path
+) -> None:
+    from acr.learning.proposals import propose_skill_evolution
+    from acr.skills.evolution import create_candidate_version
+    from acr.skills.models import SkillStatus
+    from acr.skills.registry import set_status
+
+    baseline = await register(db_session, FIXTURES / "sqlite-diagnostics")
+    baseline = await set_status(db_session, baseline.id, SkillStatus.ACTIVE)
+    candidate = await create_candidate_version(db_session, tmp_path, baseline, {})
+    await db_session.commit()
+
+    proposal = await propose_skill_evolution(
+        db_session,
+        migrated_settings,
+        TelemetryRecorder(),
+        baseline_id=baseline.id,
+        candidate_id=candidate.id,
+    )
+    await db_session.commit()
+    assert proposal is not None
+
+    response = _client(migrated_settings).get("/proposals")
+
+    assert response.status_code == 200
+    assert "skill_evolution_promotion" in response.text
+    assert baseline.id in response.text
+
+
+async def test_proposals_page_renders_with_none_yet(migrated_settings: Settings) -> None:
+    response = _client(migrated_settings).get("/proposals")
+
+    assert response.status_code == 200
+    assert "No proposals yet" in response.text
+
+
 async def test_visualization_page_renders_the_canvas_and_script(
     migrated_settings: Settings,
 ) -> None:

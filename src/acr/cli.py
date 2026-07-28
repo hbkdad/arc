@@ -40,6 +40,17 @@ from acr.evaluation.waste_analyzer import (
 from acr.integrations.mcp_server import create_mcp_server
 from acr.learning.distillation import DistillationResult, TaskNotFoundError, distill_and_remember
 from acr.learning.promotion import PromotionReport, promote_candidates
+from acr.learning.proposals import (
+    Proposal,
+    ProposalNotFoundError,
+    ProposalNotPendingError,
+    ProposalStatus,
+    SelfImprovementDisabledError,
+    approve_proposal,
+    list_proposals,
+    propose_skill_evolution,
+    reject_proposal,
+)
 from acr.learning.skill_generation import (
     RepeatedPattern,
     detect_repeated_successes,
@@ -89,6 +100,7 @@ learn_app = typer.Typer(name="learn", help="Experience distillation, promotion, 
 agents_app = typer.Typer(name="agents", help="Agent planning, spawning, review, topology history.")
 dashboard_app = typer.Typer(name="dashboard", help="Operational dashboard.")
 mcp_app = typer.Typer(name="mcp", help="MCP server exposure.")
+improve_app = typer.Typer(name="improve", help="Controlled self-improvement proposals.")
 app.add_typer(context_app)
 app.add_typer(skills_app)
 app.add_typer(benchmark_app)
@@ -100,6 +112,7 @@ app.add_typer(security_app)
 app.add_typer(agents_app)
 app.add_typer(dashboard_app)
 app.add_typer(mcp_app)
+app.add_typer(improve_app)
 
 # Every registered benchmark suite: name -> (seed, build_cases). Only one
 # exists today (master principle #23: no feature expansion without
@@ -995,6 +1008,120 @@ def mcp_serve(
     server = create_mcp_server(settings)
     kwargs = {} if transport == "stdio" else {"host": host, "port": port}
     server.run(transport=transport, **kwargs)  # type: ignore[arg-type]
+
+
+def _echo_proposal(p: Proposal) -> None:
+    typer.echo(f"{p.id}  [{p.status.value}]  {p.kind.value}  subject={p.subject}")
+    typer.echo(f"  {p.reason}")
+
+
+@improve_app.command("propose-skill-evolution")
+def improve_propose_skill_evolution(
+    baseline_id: str = typer.Argument(..., help="Currently active skill id."),
+    candidate_id: str = typer.Argument(..., help="Evolved candidate skill id to compare."),
+) -> None:
+    """Compare a skill evolution candidate against its baseline; propose promoting it
+    only if the comparison actually recommends it (master §1721-1727)."""
+    settings = get_settings()
+
+    async def _propose() -> Proposal | None:
+        async with session_scope(settings) as session:
+            proposal = await propose_skill_evolution(
+                session,
+                settings,
+                TelemetryRecorder(),
+                baseline_id=baseline_id,
+                candidate_id=candidate_id,
+            )
+            await session.commit()
+            return proposal
+
+    try:
+        proposal = asyncio.run(_propose())
+    except SelfImprovementDisabledError as exc:
+        typer.echo(f"disabled: {exc}")
+        raise typer.Exit(code=1) from exc
+    except SkillNotFoundError as exc:
+        typer.echo(f"unknown skill: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    if proposal is None:
+        typer.echo("no proposal: candidate does not improve on the baseline")
+        return
+    _echo_proposal(proposal)
+
+
+@improve_app.command("list")
+def improve_list(
+    status: str | None = typer.Option(
+        None, "--status", help="pending|approved|rejected|auto_applied"
+    ),
+) -> None:
+    """List self-improvement proposals."""
+    settings = get_settings()
+    parsed_status = ProposalStatus(status) if status else None
+
+    async def _list() -> list[Proposal]:
+        async with session_scope(settings) as session:
+            return await list_proposals(session, status=parsed_status)
+
+    proposals = asyncio.run(_list())
+    if not proposals:
+        typer.echo("no proposals")
+        return
+    for p in proposals:
+        _echo_proposal(p)
+
+
+@improve_app.command("approve")
+def improve_approve(proposal_id: str = typer.Argument(...)) -> None:
+    """Approve a pending proposal — applies its underlying change for real."""
+    settings = get_settings()
+
+    async def _approve() -> Proposal:
+        async with session_scope(settings) as session:
+            proposal = await approve_proposal(
+                session, TelemetryRecorder(), proposal_id, safe_mode=settings.safe_mode
+            )
+            await session.commit()
+            return proposal
+
+    try:
+        proposal = asyncio.run(_approve())
+    except ProposalNotFoundError as exc:
+        typer.echo(f"unknown proposal: {exc}")
+        raise typer.Exit(code=1) from exc
+    except ProposalNotPendingError as exc:
+        typer.echo(f"cannot approve: {exc}")
+        raise typer.Exit(code=1) from exc
+    except SafeModeError as exc:
+        typer.echo(f"denied: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    _echo_proposal(proposal)
+
+
+@improve_app.command("reject")
+def improve_reject(proposal_id: str = typer.Argument(...)) -> None:
+    """Reject a pending proposal — no change is applied."""
+    settings = get_settings()
+
+    async def _reject() -> Proposal:
+        async with session_scope(settings) as session:
+            proposal = await reject_proposal(session, TelemetryRecorder(), proposal_id)
+            await session.commit()
+            return proposal
+
+    try:
+        proposal = asyncio.run(_reject())
+    except ProposalNotFoundError as exc:
+        typer.echo(f"unknown proposal: {exc}")
+        raise typer.Exit(code=1) from exc
+    except ProposalNotPendingError as exc:
+        typer.echo(f"cannot reject: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    _echo_proposal(proposal)
 
 
 if __name__ == "__main__":

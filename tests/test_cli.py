@@ -380,6 +380,65 @@ def test_skills_evolve_compare_and_promote_end_to_end(migrated_settings: Setting
     assert "restored sqlite-diagnostics -> active" in rollback_result.stdout
 
 
+def test_improve_propose_approve_end_to_end(migrated_settings: Settings) -> None:
+    runner.invoke(app, ["skills", "register", str(_FIXTURE_SKILL)])
+    runner.invoke(app, ["skills", "activate", "sqlite-diagnostics", "--status", "active"])
+    runner.invoke(
+        app, ["skills", "evolve", "sqlite-diagnostics", "--description", "Improved diagnostics."]
+    )
+
+    propose_result = runner.invoke(
+        app,
+        [
+            "improve",
+            "propose-skill-evolution",
+            "sqlite-diagnostics",
+            "sqlite-diagnostics@v2",
+        ],
+    )
+    assert propose_result.exit_code == 0
+    assert "[pending]" in propose_result.stdout
+    match = re.search(
+        r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", propose_result.stdout
+    )
+    assert match is not None
+    proposal_id = match.group(1)
+
+    list_result = runner.invoke(app, ["improve", "list", "--status", "pending"])
+    assert list_result.exit_code == 0
+    assert proposal_id in list_result.stdout
+
+    approve_result = runner.invoke(app, ["improve", "approve", proposal_id])
+    assert approve_result.exit_code == 0
+    assert "[approved]" in approve_result.stdout
+
+    activate_result = runner.invoke(app, ["skills", "list"])
+    assert "sqlite-diagnostics@v2" in activate_result.stdout
+
+
+def test_improve_reject_leaves_the_candidate_unpromoted(migrated_settings: Settings) -> None:
+    runner.invoke(app, ["skills", "register", str(_FIXTURE_SKILL)])
+    runner.invoke(app, ["skills", "activate", "sqlite-diagnostics", "--status", "active"])
+    runner.invoke(app, ["skills", "evolve", "sqlite-diagnostics"])
+
+    propose_result = runner.invoke(
+        app, ["improve", "propose-skill-evolution", "sqlite-diagnostics", "sqlite-diagnostics@v2"]
+    )
+    match = re.search(
+        r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", propose_result.stdout
+    )
+    assert match is not None
+    proposal_id = match.group(1)
+
+    reject_result = runner.invoke(app, ["improve", "reject", proposal_id])
+    assert reject_result.exit_code == 0
+    assert "[rejected]" in reject_result.stdout
+
+    second_reject = runner.invoke(app, ["improve", "reject", proposal_id])
+    assert second_reject.exit_code == 1
+    assert "cannot reject" in second_reject.stdout
+
+
 def test_skills_evolve_reports_unknown_baseline_cleanly(migrated_settings: Settings) -> None:
     result = runner.invoke(app, ["skills", "evolve", "does-not-exist"])
     assert result.exit_code == 1

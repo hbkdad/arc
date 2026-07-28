@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Self-improvement proposals</h1>
+<p>
+  self_improvement_enabled=<code>{{ self_improvement_enabled }}</code>,
+  auto_apply_proposals=<code>{{ auto_apply_proposals }}</code>.
+  Proposals require explicit approval (<code>acr improve approve &lt;id&gt;</code>)
+  unless auto-apply is on. Read-only view — approve/reject from the CLI.
+</p>
+{% if selected_status %}
+<p>Filtered to <code>{{ selected_status }}</code> — <a href="/proposals">clear</a></p>
+{% endif %}
+<table>
+<tr><th>ID</th><th>Status</th><th>Kind</th><th>Subject</th><th>Reason</th><th>Created</th><th>Decided</th></tr>
+{% for p in proposals %}
+<tr>
+  <td><code>{{ p.id[:8] }}</code></td>
+  <td class="{{ 'status-granted' if p.status.value in ('approved', 'auto_applied') else ('status-denied' if p.status.value == 'rejected' else '') }}">{{ p.status.value }}</td>
+  <td>{{ p.kind.value }}</td>
+  <td>{{ p.subject }}</td>
+  <td>{{ p.reason }}</td>
+  <td>{{ p.created_at }}</td>
+  <td>{{ p.decided_at or "—" }}</td>
+</tr>
+{% else %}
+<tr><td colspan="7" class="empty">No proposals yet.</td></tr>
+{% endfor %}
+</table>
+{% endblock %}

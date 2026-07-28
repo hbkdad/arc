@@ -36,6 +36,16 @@ class Settings(BaseSettings):
     # write tool invocation, and other mutating operations. Off by default.
     safe_mode: bool = False
 
+    # master §1721-1727, Controlled Self-Improvement. self_improvement_enabled
+    # is the master kill switch (on by default -- explicit user decision: ACR
+    # should self-improve within the design/intent it was given). Proposals
+    # always require explicit approval before taking effect unless
+    # auto_apply_proposals is turned on (off by default -- also an explicit
+    # user decision: approval-gated is the safe default, autonomous
+    # application is an opt-in escape hatch, not the other way around).
+    self_improvement_enabled: bool = True
+    auto_apply_proposals: bool = False
+
     @property
     def database_path(self) -> Path:
         return self.data_dir / "acr.db"

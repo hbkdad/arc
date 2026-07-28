@@ -30,6 +30,7 @@ from acr.config import Settings, get_settings
 from acr.dashboard import queries
 from acr.db.base import make_engine, make_session_factory
 from acr.doctor import run_checks
+from acr.learning.proposals import ProposalStatus, list_proposals
 from acr.routing.models import ModelProfile, build_default_router
 from acr.security.audit import recent_audit_events
 from acr.skills.registry import list_skills
@@ -180,6 +181,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "events": rows,
                 "counts": counts,
                 "selected_type": event_type,
+            },
+        )
+
+    @app.get("/proposals", response_class=HTMLResponse)
+    async def proposals(
+        request: Request,
+        session: AsyncSession = Depends(get_session),
+        status: str | None = None,
+    ) -> HTMLResponse:
+        parsed_status = ProposalStatus(status) if status else None
+        rows = await list_proposals(session, status=parsed_status)
+        return templates.TemplateResponse(
+            request,
+            "proposals.html",
+            {
+                "active": "proposals",
+                "proposals": rows,
+                "selected_status": status,
+                "self_improvement_enabled": settings.self_improvement_enabled,
+                "auto_apply_proposals": settings.auto_apply_proposals,
             },
         )
 

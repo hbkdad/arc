@@ -17,6 +17,7 @@ from acr.benchmarks import models as _benchmark_models  # noqa: F401
 from acr.config import Settings, get_settings
 from acr.core.tasks import models as _task_models  # noqa: F401
 from acr.db.base import Base, make_engine, make_session_factory
+from acr.learning import proposals as _learning_proposals_models  # noqa: F401
 from acr.memory import models as _memory_models  # noqa: F401
 from acr.memory.fts import create_fts as create_memory_fts
 from acr.skills import models as _skill_models  # noqa: F401

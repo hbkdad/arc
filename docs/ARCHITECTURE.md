@@ -35,7 +35,8 @@ acrtest/
 ├── SECURITY.md            # GitHub private vulnerability reporting
 ├── CONTRIBUTING.md
 ├── .mcp.json               # registers `acr mcp serve` as a Claude Code project MCP server
-├── .github/workflows/ci.yml  # ruff + pyright + migrations + pytest, every push/PR
+├── .github/workflows/ci.yml       # ruff + pyright + migrations + pytest, every push/PR
+├── .github/workflows/publish.yml  # PyPI Trusted Publishing, on GitHub Release
 ├── pyproject.toml         # uv project: deps, ruff, pyright, pytest config
 ├── uv.lock
 ├── alembic.ini             # script_location = src/acr/migrations (dev/source-checkout path)
@@ -953,10 +954,21 @@ stdin) starts and exits cleanly before committing.
 
 ## PyPI packaging groundwork
 
-Not published yet (needs a PyPI account/token from the user — a distinct
-action, not assumed here), but the package now builds and actually works
-standalone, which a real `uv build` + install test caught two gaps in:
+The package now builds and actually works standalone, verified rather
+than assumed. Not live on PyPI yet — the publish workflow exists and is
+wired for Trusted Publishing, but the triggering GitHub Release hasn't
+been created (a distinct, explicit action — see "Publishing" below).
 
+- **Distribution name is `acr-runtime`, not `acr`.** Checked PyPI before
+  assuming the obvious name was free: `acr` is taken (an unrelated,
+  abandoned 2011 CMS package), and so are `arc` and `acr-cli`. User chose
+  `acr-runtime` from the available options. The installed CLI command
+  stays `acr` regardless (`[project.scripts]` is independent of the
+  distribution name) — only `pip install <name>` changes.
+  `[tool.uv.build-backend] module-name = "acr"` tells uv_build the
+  importable module (`src/acr/`) doesn't match the distribution name
+  (`acr-runtime` -> `acr_runtime` by default normalization) — without it,
+  the build fails looking for a nonexistent `src/acr_runtime/`.
 - `pyproject.toml` gained the metadata a real PyPI listing needs:
   `authors`, `keywords`, `classifiers` (honestly "Development Status :: 3
   - Alpha", not overclaiming maturity), and `[project.urls]` pointing at
@@ -965,8 +977,8 @@ standalone, which a real `uv build` + install test caught two gaps in:
   "MIT"` is set; `uv build` itself warns about the combination.
 - **Real bug found by actually building and installing the wheel**, not
   just reading the config: `migrations/` lived at the repo root, outside
-  `src/acr/`, so it was never bundled — a `pip install acr` user would
-  have the CLI but no way to create the database schema at all.
+  `src/acr/`, so it was never bundled — a `pip install acr-runtime` user
+  would have the CLI but no way to create the database schema at all.
   Fixed by moving it to `src/acr/migrations/` (now ships in the wheel;
   `alembic.ini`'s `script_location` updated to match, so the dev/source
   workflow — `uv run alembic upgrade head` — is unaffected) and adding
@@ -979,8 +991,42 @@ standalone, which a real `uv build` + install test caught two gaps in:
   install`ed it into a throwaway venv, `cd`'d to an unrelated directory
   with no repo, no `alembic.ini`, nothing but the installed package, and
   ran `acr db upgrade` (created a real schema from scratch),
-  `acr doctor`, and `acr run "..."` end-to-end — all worked identically
-  to the source-checkout experience.
+  `acr doctor`, `acr run "..."`, and `acr version` end-to-end — all
+  worked identically to the source-checkout experience. Re-ran after the
+  `acr` -> `acr-runtime` rename too (that rename briefly broke the local
+  dev venv's `acr` console-script shim until `uv sync --reinstall` —
+  `uv sync` alone doesn't always regenerate it after a project rename).
+
+### Publishing (Trusted Publishing, no token ever stored)
+
+`.github/workflows/publish.yml` fires on a published GitHub Release and
+publishes via [PyPI Trusted Publishing](https://docs.pypi.org/trusted-publishers/)
+(OIDC) — no API token exists anywhere in this repo, in GitHub secrets, or
+in this session; verified the exact current setup against PyPI's own docs
+rather than guessing. `permissions: id-token: write` at job level plus
+`pypa/gh-action-pypi-publish@release/v1` is the whole publish step.
+
+Chosen deliberately over an API-token-based workflow: handling a
+token — even one pasted into a GitHub secret rather than given directly
+to the assistant — isn't something this session does under any
+circumstance. Trusted Publishing needs no token to ever exist.
+
+One-time setup only the user can do (needs their PyPI login): on
+pypi.org, Account Settings → Publishing → add a pending publisher, with:
+
+| Field | Value |
+|---|---|
+| PyPI Project Name | `acr-runtime` |
+| Owner | `hbkdad` |
+| Repository name | `arc` |
+| Workflow filename | `publish.yml` |
+| Environment name | `pypi` |
+
+After that, creating a GitHub Release (tag `v0.1.0` or similar) triggers
+the actual publish — a real, irreversible, public action (a given
+version can never be re-uploaded to PyPI once published), so this
+session asks before creating one rather than doing it as a side effect
+of packaging work.
 
 ## What's left
 
@@ -994,8 +1040,11 @@ deferred gaps, each with a reason rather than an oversight:
   (target platforms, UI approach) whenever it's picked up.
 - **PyPI package / "downloads"** (Phase 14) — packaging groundwork done
   and verified working (build + install + run end-to-end in an isolated
-  environment — see "PyPI packaging groundwork" above); actually
-  publishing needs a PyPI account/token from the user, not assumed here.
+  environment), Trusted Publishing workflow ready — see "PyPI packaging
+  groundwork" above. Two things only the user can do: configure the
+  pending publisher on pypi.org (needs their login), and approve creating
+  the actual GitHub Release that triggers the first publish (irreversible
+  once live).
 - **Bespoke Claude Code / Codex MCP client config** (Phase 13) — half
   done. `.mcp.json` at the repo root registers `acr mcp serve` as a
   project-scoped MCP server for Claude Code specifically (format

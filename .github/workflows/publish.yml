@@ -1,0 +1,33 @@
+name: Publish to PyPI
+
+# Fires when a GitHub Release is published (tag-based). No API token
+# anywhere in this workflow, ever: PyPI Trusted Publishing (OIDC) trusts
+# this exact repo + workflow + environment directly, configured on
+# pypi.org's side (Account -> Publishing -> pending publisher), not here.
+# See docs/ARCHITECTURE.md's "PyPI packaging groundwork" section.
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/acr-runtime/
+    permissions:
+      id-token: write # required for Trusted Publishing OIDC exchange
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

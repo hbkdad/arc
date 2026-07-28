@@ -34,6 +34,7 @@ acrtest/
 ├── LICENSE                # MIT
 ├── SECURITY.md            # GitHub private vulnerability reporting
 ├── CONTRIBUTING.md
+├── .github/workflows/ci.yml  # ruff + pyright + migrations + pytest, every push/PR
 ├── pyproject.toml         # uv project: deps, ruff, pyright, pytest config
 ├── uv.lock
 ├── alembic.ini
@@ -911,6 +912,24 @@ running Ollama daemon (`qwen2.5-coder:1.5b`, `llama3.1:8b` actually
 pulled) — `acr run "..." --min-quality-tier 1` now genuinely completes via
 a local model, not just in theory.
 
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every push to `main` and every PR:
+`ruff check`, `ruff format --check`, `pyright`, a from-scratch `alembic
+upgrade head` (catches migration-ordering bugs the in-memory
+`Base.metadata.create_all()` test fixture can't — every real migration
+this project has wants that guarantee too, not just this one), then the
+full `pytest` suite. Deliberately does **not** run `playwright install
+chromium`: that's a large, separate download this project has treated as
+requiring explicit sign-off everywhere else (Phase 13), and making it a
+CI-run side effect on every push would quietly violate that same
+principle. `tests/test_tools_browser.py` already skips those cases
+gracefully when the binary is absent, so CI is honest about what it
+covers rather than silently green over untested code. Single-OS
+(`ubuntu-latest`) for now — no evidence yet of a Windows/macOS-specific
+bug that would justify a matrix (master principle: no infrastructure
+ahead of need).
+
 ## What's left
 
 Every phase in the master spec's 15-phase list (§65-66) now has a
@@ -935,9 +954,18 @@ deferred gaps, each with a reason rather than an oversight:
   self-improvement" above) — a second proposal kind is a matter of
   writing a new evidence-producing comparison and an `_apply()` branch,
   not a redesign.
-- **Real Ollama/cloud provider usage** — `MockProvider` is the default
-  everywhere (CLI `run`, MCP `run_task`); `OllamaProvider` and the cloud
-  adapters exist and are tested but nothing routes to them by default.
+- **Real Ollama/cloud provider usage by default** — fixed to be reachable
+  (see "Real provider routing" above: `--min-quality-tier`/`min_quality_tier`
+  now actually route there), but `0`/mock stays the *default* deliberately
+  — a fresh install shouldn't silently start making paid API calls or
+  depend on a local daemon being up. Still a real gap if the goal is
+  "just works with whatever's configured" rather than "opt-in."
+- **CI** — done: `.github/workflows/ci.yml` (see "Continuous integration"
+  above).
+- **PyPI packaging groundwork** — not started. Needed for the "individual
+  developers" go-to-market audience to get `pip install acr`/`uvx acr`
+  instead of clone + `uv sync`; actually publishing needs a PyPI
+  account/token from the user.
 
 None of the above are "next up" in a committed sequence — they're each a
 real, scoped decision waiting on the user (credentials, an account, a

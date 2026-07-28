@@ -1,5 +1,8 @@
 # ACR — Adaptive Cognitive Runtime
 
+[![CI](https://github.com/hbkdad/arc/actions/workflows/ci.yml/badge.svg)](https://github.com/hbkdad/arc/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 Local-first, model-independent AI orchestration and cognitive runtime.
 Full specification: [`ACR_MASTER_SYSTEM_PROMPT.md`](ACR_MASTER_SYSTEM_PROMPT.md).
 Current state and toolchain: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)

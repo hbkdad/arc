@@ -20,6 +20,7 @@ htmlcov/
 
 # Local data (SQLite DB, logs) — never commit runtime state
 /data/
+/.ci-data/
 *.db
 *.db-journal
 *.sqlite

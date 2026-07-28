@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      ACR_DATA_DIR: ${{ github.workspace }}/.ci-data
+      ACR_LOG_FORMAT: console
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Install Python and dependencies
+        run: |
+          uv python install 3.12
+          uv sync --dev
+
+      - name: ruff check
+        run: uv run ruff check .
+
+      - name: ruff format --check
+        run: uv run ruff format --check .
+
+      - name: pyright
+        run: uv run pyright
+
+      - name: Alembic migrations apply cleanly from scratch
+        run: uv run alembic upgrade head
+
+      - name: pytest
+        run: uv run pytest -q
+        # Playwright's Chromium binary is deliberately not installed here:
+        # it's a large, separate download (see docs/ARCHITECTURE.md) that
+        # shouldn't be a CI-run side effect. tests/test_tools_browser.py
+        # skips gracefully (BrowserNotInstalledError -> pytest.skip) rather
+        # than failing when it's absent, by design.

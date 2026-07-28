@@ -20,6 +20,11 @@ uv run ruff format .     # format
 uv run pyright           # type check
 ```
 
+CI (`.github/workflows/ci.yml`) runs the same gate, plus a from-scratch
+Alembic migration check, on every push and PR. It deliberately doesn't
+install Playwright's browser binary — `tests/test_tools_browser.py` skips
+those cases gracefully rather than requiring it.
+
 ## How this project is built
 
 Read [`ACR_MASTER_SYSTEM_PROMPT.md`](ACR_MASTER_SYSTEM_PROMPT.md) first —

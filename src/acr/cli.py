@@ -32,22 +32,31 @@ from acr.evaluation.waste_analyzer import (
     find_duplicate_memories,
 )
 from acr.logging import configure_logging, get_logger
+from acr.providers.base import CompletionRequest
 from acr.providers.mock import MockProvider
+from acr.routing.models import ModelProfile, RoutedCompletion, build_default_router
 from acr.skills.models import SkillRecord, SkillStatus
 from acr.skills.registry import list_skills, register, set_status
 from acr.skills.routing import RoutedSkill, route
 from acr.skills.search import SkillSearchResult, search
 from acr.telemetry.recorder import TelemetryRecorder
+from acr.tools.default_tools import build_default_registry
+from acr.tools.exposure import expose_tools
+from acr.tools.models import ToolSpec
 
 app = typer.Typer(name="acr", help="ACR — Adaptive Cognitive Runtime", no_args_is_help=True)
 context_app = typer.Typer(name="context", help="Context compiler operations.")
 skills_app = typer.Typer(name="skills", help="Skill registry operations.")
 benchmark_app = typer.Typer(name="benchmark", help="Benchmark suites.")
 waste_app = typer.Typer(name="waste", help="Token waste analysis.")
+models_app = typer.Typer(name="models", help="Model routing.")
+tools_app = typer.Typer(name="tools", help="Tool registry operations.")
 app.add_typer(context_app)
 app.add_typer(skills_app)
 app.add_typer(benchmark_app)
 app.add_typer(waste_app)
+app.add_typer(models_app)
+app.add_typer(tools_app)
 
 # Every registered benchmark suite: name -> (seed, build_cases). Only one
 # exists today (master principle #23: no feature expansion without
@@ -304,6 +313,65 @@ def waste_utilization() -> None:
         f"samples={report.sample_count} utilization={report.utilization:.2%} "
         f"wasted_tokens={report.wasted_tokens}"
     )
+
+
+@models_app.command("list")
+def models_list() -> None:
+    """List the model routing ladder and each profile's live availability."""
+    settings = get_settings()
+    router = build_default_router(settings)
+
+    async def _availability() -> list[tuple[ModelProfile, bool]]:
+        return [(p, await p.provider.is_available()) for p in router.profiles]
+
+    for profile, available in asyncio.run(_availability()):
+        status = "available" if available else "unavailable"
+        typer.echo(
+            f"{profile.name}\ttier={profile.quality_tier}\t"
+            f"cost/1k={profile.cost_per_1k_tokens:.2f}\t{status}"
+        )
+
+
+@models_app.command("route")
+def models_route(
+    prompt: str = typer.Argument(..., help="Prompt to complete via the routed model ladder."),
+    min_quality_tier: int = typer.Option(0, "--min-quality-tier"),
+) -> None:
+    """Complete a prompt via the cheapest qualifying available model."""
+    settings = get_settings()
+    router = build_default_router(settings)
+
+    async def _route() -> RoutedCompletion:
+        return await router.complete_with_escalation(
+            CompletionRequest(prompt=prompt), min_quality_tier=min_quality_tier
+        )
+
+    routed = asyncio.run(_route())
+    typer.echo(f"tried={','.join(routed.tried_profiles)} escalated={routed.escalated}")
+    typer.echo(routed.result.text)
+
+
+@tools_app.command("list")
+def tools_list() -> None:
+    """List every registered tool."""
+    registry = build_default_registry()
+    for tool in registry.list_tools():
+        typer.echo(f"{tool.name}\t{tool.side_effect_level.value}\t{tool.description}")
+
+
+@tools_app.command("expose")
+def tools_expose(
+    task_description: str = typer.Argument(..., help="Task to expose relevant tools for."),
+    max_tools: int = typer.Option(5, "--max-tools"),
+) -> None:
+    """Show the task-specific subset of tools that would be exposed to a model."""
+    registry = build_default_registry()
+    exposed: list[ToolSpec] = expose_tools(registry, task_description, max_tools=max_tools)
+    if not exposed:
+        typer.echo("no tools matched this task description")
+        return
+    for tool in exposed:
+        typer.echo(f"{tool.name}\t{tool.description}")
 
 
 if __name__ == "__main__":

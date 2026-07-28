@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     # "json" for machine-readable logs, "console" for human-readable dev output.
     log_format: str = "json"
 
+    # Cloud providers are opt-in (master principle #2: cloud-optional). Unset
+    # by default; ACR_OPENAI_API_KEY / ACR_ANTHROPIC_API_KEY enable them.
+    openai_api_key: str | None = None
+    anthropic_api_key: str | None = None
+
     @property
     def database_path(self) -> Path:
         return self.data_dir / "acr.db"

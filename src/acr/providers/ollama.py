@@ -2,8 +2,6 @@
 
 Talks only to a local Ollama daemon. Never contacts anything off localhost by
 default, so it never needs a credential and never sends data externally.
-Not wired as the default provider yet — full routing (local model preferred
-over paid, escalation on verification failure) is master §794-813, Phase 6.
 """
 
 from __future__ import annotations
@@ -32,6 +30,18 @@ class OllamaProvider(ModelProvider):
                 return response.status_code == httpx.codes.OK
         except httpx.HTTPError:
             return False
+
+    async def list_models(self) -> list[str]:
+        """Local model detection (master §814-824). Empty if the daemon is
+        unreachable — never raises."""
+        try:
+            async with httpx.AsyncClient(timeout=_AVAILABILITY_TIMEOUT_SECONDS) as client:
+                response = await client.get(f"{self.base_url}/api/tags")
+                response.raise_for_status()
+                data = response.json()
+        except httpx.HTTPError:
+            return []
+        return [model["name"] for model in data.get("models", [])]
 
     async def complete(self, request: CompletionRequest) -> CompletionResult:
         async with httpx.AsyncClient(timeout=_COMPLETION_TIMEOUT_SECONDS) as client:

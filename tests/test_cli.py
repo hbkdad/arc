@@ -112,3 +112,29 @@ def test_waste_commands_run_cleanly_with_no_history(migrated_settings: Settings)
     utilization = runner.invoke(app, ["waste", "utilization"])
     assert utilization.exit_code == 0
     assert "utilization=" in utilization.stdout
+
+
+def test_models_list_shows_the_routing_ladder(migrated_settings: Settings) -> None:
+    result = runner.invoke(app, ["models", "list"])
+    assert result.exit_code == 0
+    assert "mock" in result.stdout
+    assert "ollama" in result.stdout
+    assert "openai_compatible" in result.stdout
+    assert "anthropic_compatible" in result.stdout
+
+
+def test_models_route_completes_via_mock(migrated_settings: Settings) -> None:
+    result = runner.invoke(app, ["models", "route", "hello there"])
+    assert result.exit_code == 0
+    assert "tried=" in result.stdout
+
+
+def test_tools_list_and_expose(migrated_settings: Settings) -> None:
+    list_result = runner.invoke(app, ["tools", "list"])
+    assert list_result.exit_code == 0
+    assert "memory_search" in list_result.stdout
+    assert "skill_search" in list_result.stdout
+
+    expose_result = runner.invoke(app, ["tools", "expose", "search the memory store"])
+    assert expose_result.exit_code == 0
+    assert "memory_search" in expose_result.stdout

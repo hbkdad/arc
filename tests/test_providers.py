@@ -21,3 +21,18 @@ async def test_mock_provider_completes_deterministically() -> None:
 async def test_ollama_provider_reports_unavailable_when_unreachable() -> None:
     provider = OllamaProvider(base_url="http://127.0.0.1:1")
     assert await provider.is_available() is False
+
+
+async def test_ollama_list_models_is_empty_when_unreachable() -> None:
+    provider = OllamaProvider(base_url="http://127.0.0.1:1")
+    assert await provider.list_models() == []
+
+
+async def test_ollama_list_models_returns_strings_when_reachable() -> None:
+    # Doesn't assert specific model names: passes whether or not Ollama is
+    # actually installed in the environment running this test (an empty
+    # list is a valid result too).
+    provider = OllamaProvider()
+    models = await provider.list_models()
+    assert isinstance(models, list)
+    assert all(isinstance(name, str) for name in models)

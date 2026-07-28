@@ -12,10 +12,10 @@ A modular monorepo: `apps/` (api, dashboard, website, desktop), `packages/`
 `tools/`, `learning/`, `telemetry/`, `security/`), plus `benchmarks/`,
 `migrations/`, `tests/`, `scripts/`, `examples/`, `docs/`.
 
-## Current shape (Phase 0 Foundation + Phase 1 Execution + Phase 2 Memory + Phase 3 Context + Phase 4 Skills + Phase 5 Evaluation)
+## Current shape (Phase 0 Foundation + Phase 1 Execution + Phase 2 Memory + Phase 3 Context + Phase 4 Skills + Phase 5 Evaluation + Phase 6 Routing)
 
 Only the Python CLI foundation, task engine, memory system, context compiler,
-skill system, and evaluation system exist. See
+skill system, evaluation system, and model/tool routing exist. See
 [`docs/adr/0001-src-layout-single-package.md`](adr/0001-src-layout-single-package.md)
 for why this is one `src/acr/` package rather than the full multi-directory
 tree, and when to split it.
@@ -50,7 +50,9 @@ acrtest/
 │   ├── providers/
 │   │   ├── base.py        # ModelProvider ABC (provider-independence boundary)
 │   │   ├── mock.py         # MockProvider — zero-config default, no network
-│   │   └── ollama.py       # OllamaProvider — optional local HTTP adapter
+│   │   ├── ollama.py       # OllamaProvider — local HTTP adapter + list_models()
+│   │   ├── openai_compatible.py     # OpenAICompatibleProvider — opt-in, needs an API key
+│   │   └── anthropic_compatible.py  # AnthropicCompatibleProvider — opt-in, needs an API key
 │   ├── telemetry/
 │   │   ├── models.py       # TelemetryEvent
 │   │   └── recorder.py     # TelemetryRecorder.emit() — DB + structured log
@@ -77,10 +79,17 @@ acrtest/
 │   │   ├── panel.py            # evaluate_with_panel(): majority-vote aggregation
 │   │   ├── regression.py       # detect_regression(): compare consecutive BenchmarkRuns
 │   │   └── waste_analyzer.py   # duplicate-memory + context-utilization detectors
-│   └── benchmarks/
-│       ├── models.py          # BenchmarkCase/CaseResult (in-memory), BenchmarkRun (persisted)
-│       ├── runner.py           # run_suite(): executes cases for real, persists a BenchmarkRun
-│       └── memory_recall.py    # a genuine memory-recall suite exercising Phase 2 code
+│   ├── benchmarks/
+│   │   ├── models.py          # BenchmarkCase/CaseResult (in-memory), BenchmarkRun (persisted)
+│   │   ├── runner.py           # run_suite(): executes cases for real, persists a BenchmarkRun
+│   │   └── memory_recall.py    # a genuine memory-recall suite exercising Phase 2 code
+│   ├── routing/
+│   │   └── models.py          # ModelProfile/ModelRouter: cheapest-qualified + escalation
+│   └── tools/
+│       ├── models.py          # ToolSpec (master §827-838 field set), SideEffectLevel
+│       ├── registry.py        # in-memory ToolRegistry (tools are code, not user data)
+│       ├── default_tools.py    # real tools: memory_search, skill_search
+│       └── exposure.py         # expose_tools(): task-specific subset, min-relevance gated
 ├── tests/
 │   ├── fixtures/skills/       # sqlite-diagnostics (valid), broken-skill (invalid manifest)
 │   ├── conftest.py         # isolated_env / settings / migrated_settings / db_session
@@ -105,7 +114,10 @@ acrtest/
 │   ├── test_evaluation.py
 │   ├── test_benchmarks.py
 │   ├── test_regression.py
-│   └── test_waste_analyzer.py
+│   ├── test_waste_analyzer.py
+│   ├── test_providers_cloud.py
+│   ├── test_model_router.py
+│   └── test_tools.py
 └── docs/
     ├── ARCHITECTURE.md     # this file
     └── adr/0001-src-layout-single-package.md
@@ -158,9 +170,9 @@ needs them (avoids speculative infrastructure, master principle #24).
 `acr.providers.base.ModelProvider` is the one seam core code is allowed to
 depend on for "call a model" — never a specific SDK. `MockProvider` (no
 network, deterministic) is the CLI's default so `acr run` works with zero
-configuration. `OllamaProvider` talks only to `localhost:11434`; it exists as
-infrastructure but isn't the default yet — real provider routing (prefer
-local, escalate to cloud on verification failure) is master §794-813, Phase 6.
+configuration. `OllamaProvider` talks only to `localhost:11434`. Real
+provider routing (prefer local, escalate to cloud on verification failure)
+is `acr.routing.models` — see Phase 6 below.
 
 ## Memory system (Phase 2)
 
@@ -268,6 +280,36 @@ other master §1026-1039 waste categories (oversized system prompts, unused
 tool/skill definitions, excessive agent coordination) need subsystems that
 don't exist yet and are deliberately not stubbed.
 
+## Model and tool routing (Phase 6)
+
+`acr.routing.models.ModelRouter` implements master §805-806's routing
+objective (cheapest model expected to meet a quality threshold) and
+§807-812's escalation (try the cheapest qualifying model; if a caller's
+`verify` rejects the result, escalate to the next-higher-`quality_tier`
+available model; return which models were tried so escalation's effect is
+trackable rather than invisible). `build_default_router()` wires the
+standard ladder: `mock` (tier 0, free, always available) -> `ollama` (tier
+1, free, available iff reachable) -> `openai_compatible`/
+`anthropic_compatible` (tier 2, paid, available iff an API key is
+configured via `ACR_OPENAI_API_KEY`/`ACR_ANTHROPIC_API_KEY` — master
+principle #2: cloud-optional). `OllamaProvider.list_models()` is master
+§814-824's "detect local Ollama models", hitting `/api/tags` for real.
+
+`acr.tools` is a new domain: `ToolSpec` carries the exact field set master
+§827-838 requires (schemas, permissions, `SideEffectLevel`, cost/latency
+estimates, network/filesystem access, credential requirements). Tools are
+code-registered, not user-submitted data like memories or skills — there's
+no "generate a tool at runtime" concept in the master spec — so
+`ToolRegistry` is in-memory, not a DB table. `default_tools.py` registers
+two real tools (`memory_search`, `skill_search`) wrapping Phase 2/4 code, so
+the registry demonstrates actual invocation, not just metadata bookkeeping.
+`exposure.expose_tools()` is master §843-844's "tool exposure must be
+task-specific... do not load every tool definition into every model call":
+keyword-relevance ranked, gated by a minimum-relevance threshold so a
+single word two tools happen to share (e.g. both being "search" tools)
+isn't enough to expose an otherwise-irrelevant one — a real gap this
+phase's own tests found.
+
 ## Commands available today
 
 ```bash
@@ -284,6 +326,10 @@ uv run acr benchmark run memory-recall     # execute a suite for real, persist t
 uv run acr benchmark history memory-recall # compare the two most recent runs
 uv run acr waste duplicates                # duplicate memory content across subjects
 uv run acr waste utilization               # compiled vs. referenced context tokens
+uv run acr models list                     # routing ladder + live availability
+uv run acr models route "prompt" [--min-quality-tier N]
+uv run acr tools list
+uv run acr tools expose "task description" [--max-tools N]
 uv run alembic upgrade head
 uv run pytest
 uv run ruff check .
@@ -297,5 +343,5 @@ to write memory from outside a test, e.g. experience distillation (Phase 8).
 
 ## Next milestone
 
-Phase 6 — Model and Tool Routing: model router, Ollama, external providers,
-tool registry, dynamic tool exposure (master §794-925).
+Phase 7 — Security: permissions, trust boundaries, sandbox, secrets, safe
+mode, audit logs (master §1118-1224).

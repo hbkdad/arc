@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Telemetry events</h1>
+<div class="counts">
+{% for event_type, n in counts.items() | sort(attribute="1", reverse=True) %}
+<div class="count"><a href="/events?event_type={{ event_type }}"><span class="n">{{ n }}</span>{{ event_type }}</a></div>
+{% else %}
+<p class="empty">No telemetry events recorded yet.</p>
+{% endfor %}
+</div>
+{% if selected_type %}
+<p>Filtered to <code>{{ selected_type }}</code> — <a href="/events">clear</a></p>
+{% endif %}
+<table>
+<tr><th>Type</th><th>Task</th><th>Payload</th><th>When</th></tr>
+{% for e in events %}
+<tr>
+  <td><code>{{ e.event_type }}</code></td>
+  <td>{{ e.task_id or "—" }}</td>
+  <td>{{ e.payload }}</td>
+  <td>{{ e.created_at }}</td>
+</tr>
+{% else %}
+<tr><td colspan="4" class="empty">No events match.</td></tr>
+{% endfor %}
+</table>
+{% endblock %}

@@ -26,6 +26,7 @@ from acr.context.compiler import compile_context
 from acr.context.models import ContextBundle
 from acr.core.execution import run_task
 from acr.core.tasks.models import Task, TaskStatus
+from acr.dashboard.app import create_app as create_dashboard_app
 from acr.db.base import session_scope
 from acr.doctor import CheckStatus, run_checks
 from acr.evaluation.evaluators import ExactMatchEvaluator
@@ -82,6 +83,7 @@ tools_app = typer.Typer(name="tools", help="Tool registry operations.")
 security_app = typer.Typer(name="security", help="Security: audit log, injection scanning.")
 learn_app = typer.Typer(name="learn", help="Experience distillation, promotion, skill generation.")
 agents_app = typer.Typer(name="agents", help="Agent planning, spawning, review, topology history.")
+dashboard_app = typer.Typer(name="dashboard", help="Operational dashboard.")
 app.add_typer(context_app)
 app.add_typer(skills_app)
 app.add_typer(benchmark_app)
@@ -91,6 +93,7 @@ app.add_typer(models_app)
 app.add_typer(tools_app)
 app.add_typer(security_app)
 app.add_typer(agents_app)
+app.add_typer(dashboard_app)
 
 # Every registered benchmark suite: name -> (seed, build_cases). Only one
 # exists today (master principle #23: no feature expansion without
@@ -828,6 +831,18 @@ def agents_topology(
         f"{task_class}: {recommendation.recommended_worker_count} worker(s) recommended "
         f"({recommendation.detail})"
     )
+
+
+@dashboard_app.command("serve")
+def dashboard_serve(
+    host: str = typer.Option("127.0.0.1", "--host"),
+    port: int = typer.Option(8765, "--port"),
+) -> None:
+    """Serve the operational dashboard (master §1225-1240)."""
+    import uvicorn
+
+    settings = get_settings()
+    uvicorn.run(create_dashboard_app(settings), host=host, port=port)
 
 
 if __name__ == "__main__":

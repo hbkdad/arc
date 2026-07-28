@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Memory</h1>
+<h2>By type</h2>
+<div class="counts">
+{% for type_, n in type_counts.items() %}
+<div class="count"><span class="n">{{ n }}</span>{{ type_ }}</div>
+{% else %}
+<p class="empty">No memory records yet.</p>
+{% endfor %}
+</div>
+<h2>By status</h2>
+<div class="counts">
+{% for status, n in status_counts.items() %}
+<div class="count"><span class="n">{{ n }}</span>{{ status }}</div>
+{% endfor %}
+</div>
+
+<h1>Recently updated</h1>
+<table>
+<tr><th>Subject</th><th>Type</th><th>Status</th><th>Scope</th><th>Confidence</th><th>Utility</th><th>Updated</th></tr>
+{% for m in records %}
+<tr>
+  <td>{{ m.subject }}</td>
+  <td>{{ m.type.value }}</td>
+  <td>{{ m.status.value }}</td>
+  <td>{{ m.scope.value }}</td>
+  <td>{{ "%.2f" | format(m.confidence) }}</td>
+  <td>{{ "%.2f" | format(m.utility_score) }}</td>
+  <td>{{ m.updated_at }}</td>
+</tr>
+{% else %}
+<tr><td colspan="7" class="empty">No memory records yet.</td></tr>
+{% endfor %}
+</table>
+{% endblock %}

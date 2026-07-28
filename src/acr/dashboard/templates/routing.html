@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Model routing ladder</h1>
+<table>
+<tr><th>Profile</th><th>Quality tier</th><th>Cost / 1k tokens</th><th>Availability</th></tr>
+{% for profile, available in availability %}
+<tr>
+  <td>{{ profile.name }}</td>
+  <td>{{ profile.quality_tier }}</td>
+  <td>{{ "%.4f" | format(profile.cost_per_1k_tokens) }}</td>
+  <td class="{{ 'status-available' if available else 'status-unavailable' }}">{{ "available" if available else "unavailable" }}</td>
+</tr>
+{% else %}
+<tr><td colspan="4" class="empty">No profiles configured.</td></tr>
+{% endfor %}
+</table>
+{% endblock %}

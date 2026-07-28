@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>System health</h1>
+<table>
+<tr><th>Check</th><th>Status</th><th>Detail</th></tr>
+{% for c in checks %}
+<tr><td>{{ c.name }}</td><td class="status-{{ c.status.value }}">{{ c.status.value }}</td><td>{{ c.detail }}</td></tr>
+{% endfor %}
+</table>
+
+<h1>Task status</h1>
+<div class="counts">
+{% for status, n in task_counts.items() %}
+<div class="count"><span class="n">{{ n }}</span>{{ status }}</div>
+{% else %}
+<p class="empty">No tasks recorded yet.</p>
+{% endfor %}
+</div>
+
+<h1>Event activity</h1>
+<div class="counts">
+{% for event_type, n in event_counts.items() | sort(attribute="1", reverse=True) %}
+<div class="count"><span class="n">{{ n }}</span>{{ event_type }}</div>
+{% else %}
+<p class="empty">No telemetry events recorded yet.</p>
+{% endfor %}
+</div>
+{% endblock %}

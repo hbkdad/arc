@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Skills</h1>
+<table>
+<tr><th>ID</th><th>Name</th><th>Status</th><th>Origin</th><th>Reliability</th><th>Successful</th><th>Failed</th><th>Task classes</th></tr>
+{% for s in skills %}
+<tr>
+  <td><code>{{ s.id }}</code></td>
+  <td>{{ s.name }}</td>
+  <td>{{ s.status.value }}</td>
+  <td>{{ s.origin }}</td>
+  <td>{{ "%.2f" | format(s.reliability) }}</td>
+  <td>{{ s.successful_uses }}</td>
+  <td>{{ s.failed_uses }}</td>
+  <td>{{ s.task_classes | join(", ") }}</td>
+</tr>
+{% else %}
+<tr><td colspan="8" class="empty">No skills registered yet.</td></tr>
+{% endfor %}
+</table>
+{% endblock %}

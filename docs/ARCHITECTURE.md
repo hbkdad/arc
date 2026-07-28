@@ -12,11 +12,12 @@ A modular monorepo: `apps/` (api, dashboard, website, desktop), `packages/`
 `tools/`, `learning/`, `telemetry/`, `security/`), plus `benchmarks/`,
 `migrations/`, `tests/`, `scripts/`, `examples/`, `docs/`.
 
-## Current shape (Phase 0 Foundation + Phase 1 Execution + Phase 2 Memory + Phase 3 Context + Phase 4 Skills + Phase 5 Evaluation + Phase 6 Routing + Phase 7 Security + Phase 8 Learning + Phase 9 Skill Evolution + Phase 10 Agents)
+## Current shape (Phase 0 Foundation + Phase 1 Execution + Phase 2 Memory + Phase 3 Context + Phase 4 Skills + Phase 5 Evaluation + Phase 6 Routing + Phase 7 Security + Phase 8 Learning + Phase 9 Skill Evolution + Phase 10 Agents + Phase 11 Dashboard)
 
 Only the Python CLI foundation, task engine, memory system, context compiler,
 skill system, evaluation system, model/tool routing, security layer,
-learning system, skill validation/evolution, and agents exist. See
+learning system, skill validation/evolution, agents, and the operational
+dashboard exist. See
 [`docs/adr/0001-src-layout-single-package.md`](adr/0001-src-layout-single-package.md)
 for why this is one `src/acr/` package rather than the full multi-directory
 tree, and when to split it.
@@ -108,12 +109,16 @@ acrtest/
 │   │   ├── utility.py          # record_skill_outcome(): SkillRecord successful_uses/reliability
 │   │   ├── promotion.py        # promote_candidates(): CANDIDATE -> CONFIRMED on earned utility
 │   │   └── skill_generation.py # detect_repeated_successes()/generate_candidate_skill()
-│   └── agents/
-│       ├── models.py           # AgentSpec (master §749-763 field set), SpawnEstimate
-│       ├── factory.py          # estimate_spawn()/spawn_agent(): cost/value gate, runs via run_task()
-│       ├── planner.py          # plan_agent(): real skill routing + tool exposure for a spec
-│       ├── critic.py           # review_agent_task(): reuses Phase 5's evaluation panel
-│       └── topology.py         # AgentTopologyRecord, record_topology()/recommend_topology()
+│   ├── agents/
+│   │   ├── models.py           # AgentSpec (master §749-763 field set), SpawnEstimate
+│   │   ├── factory.py          # estimate_spawn()/spawn_agent(): cost/value gate, runs via run_task()
+│   │   ├── planner.py          # plan_agent(): real skill routing + tool exposure for a spec
+│   │   ├── critic.py           # review_agent_task(): reuses Phase 5's evaluation panel
+│   │   └── topology.py         # AgentTopologyRecord, record_topology()/recommend_topology()
+│   └── dashboard/
+│       ├── queries.py          # read-only SELECTs backing every dashboard view
+│       ├── app.py              # create_app(): FastAPI + Jinja2, one route per operational view
+│       └── templates/          # base.html + one template per view, plain tables, no JS framework
 ├── tests/
 │   ├── fixtures/skills/       # sqlite-diagnostics (valid), broken-skill (invalid manifest)
 │   ├── conftest.py         # isolated_env / settings / migrated_settings / db_session
@@ -158,7 +163,8 @@ acrtest/
 │   ├── test_skill_evolution.py
 │   ├── test_agents_factory.py
 │   ├── test_agents_planner_critic.py
-│   └── test_agents_topology.py
+│   ├── test_agents_topology.py
+│   └── test_dashboard.py
 └── docs/
     ├── ARCHITECTURE.md     # this file
     └── adr/0001-src-layout-single-package.md
@@ -190,6 +196,8 @@ pushed to from here.
   `acr.config.Settings.database_url` — never hardcoded in `alembic.ini`.
 - **structlog** — structured JSON logging (console mode for local dev).
 - **httpx** — async HTTP client, used only by `OllamaProvider` (localhost only).
+- **FastAPI + Jinja2 + uvicorn** — the operational dashboard (Phase 11):
+  server-rendered HTML, no separate frontend build step.
 
 ## Local-first data
 
@@ -501,6 +509,39 @@ would be exactly the unevidenced claim master principle #22 forbids.
 Recommendations are per-`task_class`: evidence from `coding` runs never
 informs a `research` recommendation.
 
+## Dashboard (Phase 11)
+
+`acr.dashboard` is a presentation layer, not a new subsystem: every view is
+a read-only `SELECT` (`acr.dashboard.queries`) or a call into a query
+function an earlier phase already wrote (`doctor.run_checks`,
+`skills.registry.list_skills`, `security.audit.recent_audit_events`,
+`tools.default_tools.build_default_registry`, `routing.models.
+build_default_router`). No view invents new scoring, ranking, or decision
+logic — the dashboard must not become a second copy of business logic that
+already lives somewhere else.
+
+`acr.dashboard.app.create_app()` builds a small FastAPI app with one route
+per master §1226-1239 category: `/` (system health, via the same checks
+`acr doctor` runs), `/tasks`, `/agents` (topology history), `/memory`,
+`/skills`, `/tools` (registered tools + recent `tool.invoke:*` audit
+events), `/routing` (the model ladder + live availability, the same data
+`acr models list` prints), `/security` (the audit log), `/benchmarks`, and
+`/events` (a generic, filterable telemetry feed — this is where token
+usage, model-call failures, and skill-validation activity actually live,
+since ACR has no separate "cost" or "learning event" table to query
+instead). Every template is a plain HTML table — master §1240: "the
+dashboard must remain useful without advanced graphics" — so there is no
+charting library, no JS framework, and no CDN dependency (the whole page is
+one inline `<style>` block, consistent with ACR being local-first and
+usable offline).
+
+`acr dashboard serve [--host --port]` runs it via uvicorn. Each request
+gets its own `AsyncSession` from a request-scoped FastAPI dependency
+(`Depends(get_session)`) built off the same `acr.db.base.make_engine`/
+`make_session_factory` every other entry point uses — the dashboard reads
+the same SQLite file `acr run`/`acr skills ...`/etc. write to, live, with
+no polling or caching layer.
+
 ## Commands available today
 
 ```bash
@@ -536,6 +577,7 @@ uv run acr skills rollback-evolution <active-id> <restore-id>
 uv run acr agents plan "objective" [--task-class X]        # AgentSpec via real routing + exposure
 uv run acr agents spawn "objective" [--force]               # estimate -> run_task() -> critic review
 uv run acr agents topology <task-class>                     # evidence-gated worker-count recommendation
+uv run acr dashboard serve [--host --port]   # operational dashboard: http://127.0.0.1:8765
 uv run alembic upgrade head
 uv run pytest
 uv run ruff check .
@@ -549,7 +591,7 @@ plus `acr.learning.distillation` as a real caller) — no
 
 ## Next milestone
 
-Phase 11 — Dashboard: operational UI showing active tasks, agent activity,
-token usage, model routing, memory activity, skills, tool execution, costs,
-failures, benchmarks, security events, learning events, and system health;
-must remain useful without advanced graphics (master §1225-1240).
+Phase 12 — Visualization: a separate, real-telemetry-driven cinematic layer
+(3D cognitive graph, live token flow, agent visualization, memory
+evolution) — explicitly distinct from the plain-table dashboard above, not
+a replacement for it (master §1242-1256+).

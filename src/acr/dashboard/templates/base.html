@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ACR Dashboard{% if active %} — {{ active | capitalize }}{% endif %}</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, sans-serif; margin: 0; display: flex; min-height: 100vh; }
+  nav { width: 160px; flex-shrink: 0; padding: 1rem 0; border-right: 1px solid #8884; }
+  nav a { display: block; padding: 0.4rem 1rem; text-decoration: none; color: inherit; }
+  nav a.active { font-weight: bold; border-left: 3px solid #4a90d9; padding-left: calc(1rem - 3px); }
+  main { flex: 1; padding: 1.5rem 2rem; max-width: 1100px; }
+  h1 { margin-top: 0; }
+  table { border-collapse: collapse; width: 100%; margin-bottom: 1.5rem; font-size: 0.9rem; }
+  th, td { text-align: left; padding: 0.35rem 0.6rem; border-bottom: 1px solid #8883; vertical-align: top; }
+  th { border-bottom: 2px solid #8886; }
+  .counts { display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.5rem; }
+  .count { border: 1px solid #8884; border-radius: 6px; padding: 0.5rem 0.9rem; }
+  .count .n { font-size: 1.4rem; font-weight: bold; display: block; }
+  .status-ok, .status-available, .status-granted { color: #2a8f3f; }
+  .status-warn { color: #b8860b; }
+  .status-fail, .status-unavailable, .status-denied, .status-blocked { color: #c0392b; }
+  code { font-size: 0.85em; }
+  .empty { color: #8888; font-style: italic; }
+</style>
+</head>
+<body>
+<nav>
+  <a href="/" class="{{ 'active' if active == 'overview' }}">Overview</a>
+  <a href="/tasks" class="{{ 'active' if active == 'tasks' }}">Tasks</a>
+  <a href="/agents" class="{{ 'active' if active == 'agents' }}">Agents</a>
+  <a href="/memory" class="{{ 'active' if active == 'memory' }}">Memory</a>
+  <a href="/skills" class="{{ 'active' if active == 'skills' }}">Skills</a>
+  <a href="/tools" class="{{ 'active' if active == 'tools' }}">Tools</a>
+  <a href="/routing" class="{{ 'active' if active == 'routing' }}">Routing</a>
+  <a href="/security" class="{{ 'active' if active == 'security' }}">Security</a>
+  <a href="/benchmarks" class="{{ 'active' if active == 'benchmarks' }}">Benchmarks</a>
+  <a href="/events" class="{{ 'active' if active == 'events' }}">Events</a>
+</nav>
+<main>
+{% block content %}{% endblock %}
+</main>
+</body>
+</html>

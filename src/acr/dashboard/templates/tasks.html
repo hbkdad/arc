@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Tasks</h1>
+<div class="counts">
+{% for status, n in counts.items() %}
+<div class="count"><span class="n">{{ n }}</span>{{ status }}</div>
+{% endfor %}
+</div>
+<table>
+<tr><th>Objective</th><th>Status</th><th>Created</th><th>Updated</th></tr>
+{% for t in tasks %}
+<tr><td>{{ t.objective }}</td><td>{{ t.status.value }}</td><td>{{ t.created_at }}</td><td>{{ t.updated_at }}</td></tr>
+{% else %}
+<tr><td colspan="4" class="empty">No tasks recorded yet.</td></tr>
+{% endfor %}
+</table>
+{% endblock %}

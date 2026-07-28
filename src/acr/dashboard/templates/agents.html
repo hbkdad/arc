@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Agent topology history</h1>
+<table>
+<tr><th>Task class</th><th>Workers</th><th>Models</th><th>Skills</th><th>Tokens</th><th>Cost</th><th>Latency (ms)</th><th>Quality</th><th>Succeeded</th><th>Recorded</th></tr>
+{% for r in records %}
+<tr>
+  <td>{{ r.task_class }}</td>
+  <td>{{ r.worker_count }}</td>
+  <td>{{ r.model_names | join(", ") }}</td>
+  <td>{{ r.skill_ids | join(", ") }}</td>
+  <td>{{ r.total_tokens }}</td>
+  <td>{{ "%.4f" | format(r.cost_estimate) }}</td>
+  <td>{{ r.latency_ms }}</td>
+  <td>{{ "%.2f" | format(r.quality_score) }}</td>
+  <td class="{{ 'status-granted' if r.succeeded else 'status-denied' }}">{{ r.succeeded }}</td>
+  <td>{{ r.created_at }}</td>
+</tr>
+{% else %}
+<tr><td colspan="10" class="empty">No agent spawns recorded yet.</td></tr>
+{% endfor %}
+</table>
+{% endblock %}

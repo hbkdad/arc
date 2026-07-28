@@ -12,13 +12,13 @@ A modular monorepo: `apps/` (api, dashboard, website, desktop), `packages/`
 `tools/`, `learning/`, `telemetry/`, `security/`), plus `benchmarks/`,
 `migrations/`, `tests/`, `scripts/`, `examples/`, `docs/`.
 
-## Current shape (Phase 0 Foundation + Phase 1 Execution + Phase 2 Memory + Phase 3 Context + Phase 4 Skills + Phase 5 Evaluation + Phase 6 Routing + Phase 7 Security + Phase 8 Learning + Phase 9 Skill Evolution + Phase 10 Agents + Phase 11 Dashboard + Phase 12 Visualization + Phase 13 Integrations (MCP, in progress))
+## Current shape (Phase 0 Foundation + Phase 1 Execution + Phase 2 Memory + Phase 3 Context + Phase 4 Skills + Phase 5 Evaluation + Phase 6 Routing + Phase 7 Security + Phase 8 Learning + Phase 9 Skill Evolution + Phase 10 Agents + Phase 11 Dashboard + Phase 12 Visualization + Phase 13 Integrations)
 
 Only the Python CLI foundation, task engine, memory system, context compiler,
 skill system, evaluation system, model/tool routing, security layer,
 learning system, skill validation/evolution, agents, the operational
-dashboard, a real-telemetry visualization, an MCP server, and a web-fetch
-tool exist. See
+dashboard, a real-telemetry visualization, an MCP server, and web-fetch/
+browser/GitHub-search tools exist. See
 [`docs/adr/0001-src-layout-single-package.md`](adr/0001-src-layout-single-package.md)
 for why this is one `src/acr/` package rather than the full multi-directory
 tree, and when to split it.
@@ -97,6 +97,7 @@ acrtest/
 │   │   ├── registry.py        # in-memory ToolRegistry (tools are code, not user data)
 │   │   ├── default_tools.py    # real tools: memory_search, skill_search, web_fetch
 │   │   ├── web_fetch.py        # http(s) GET + stdlib HTML text extraction, injection-scanned
+│   │   ├── browser.py          # real (Playwright) headless-browser render + text extraction
 │   │   ├── github_search.py    # read-only issue/PR search via the already-authenticated gh CLI
 │   │   ├── exposure.py         # expose_tools(): task-specific subset, min-relevance gated
 │   │   └── invocation.py       # invoke_tool(): permission + safe-mode check, audit-logged
@@ -175,7 +176,8 @@ acrtest/
 │   ├── test_dashboard.py
 │   ├── test_mcp_server.py
 │   ├── test_tools_web_fetch.py
-│   └── test_tools_github_search.py
+│   ├── test_tools_github_search.py
+│   └── test_tools_browser.py
 └── docs/
     ├── ARCHITECTURE.md     # this file
     └── adr/0001-src-layout-single-package.md
@@ -211,6 +213,13 @@ pushed to from here.
   server-rendered HTML, no separate frontend build step.
 - **mcp** (the official Model Context Protocol Python SDK) — the MCP
   server (Phase 13a). Supports stdio/SSE/streamable-HTTP transports.
+- **playwright** — real headless-browser automation (Phase 13). The
+  browser binary itself (`playwright install chromium`) is a distinct,
+  separately-confirmed action, never triggered as a side effect of
+  installing the Python package.
+- **gh CLI** (external, not a Python dependency) — GitHub search (Phase
+  13c). Owns its own authentication entirely; ACR's code never sees a
+  GitHub token.
 
 ## Local-first data
 
@@ -662,6 +671,30 @@ keep a single shared *content* word (e.g. two tools both named
 `*_search`) from crossing the threshold on its own — the exact scenario
 the module's own docstring already described as the thing to prevent.
 
+### Real browser automation (Playwright)
+
+`acr.tools.browser` is the JS-rendering complement to `web_fetch`: a real
+headless Chromium instance via Playwright, for pages `web_fetch`'s plain
+GET can't see anything meaningful from. Adding this was an explicit,
+separate user decision from `web_fetch`'s original scope-down — the
+`playwright` Python package is a normal dependency (added via `uv add`,
+~36MB, no different from any other package this project has added), but
+the actual browser binary (`playwright install chromium`, historically
+~100-300MB on Windows) is a distinct action this project never triggers
+silently. In this case the binary was already present on the build
+machine from prior unrelated use, so no download actually happened here —
+but the tool's own error handling (`BrowserNotInstalledError`, raised when
+Playwright reports its "Executable doesn't exist" error) still exists for
+any environment where it isn't, pointing at the exact command to run.
+
+Same trust posture as `web_fetch` and `github_search`: rendered page text
+is untrusted content and is run through `scan_for_injection()` before
+being returned. Registered the same way as every other tool
+(`permissions=["network.read"]`, `READ_ONLY`) — `acr tools browse <url>`
+on the CLI, or `browser_fetch` over MCP. Manually smoke-tested against a
+real public page (`https://example.com`) in addition to the automated
+test suite's local-server tests.
+
 ### GitHub search tool
 
 `acr.tools.github_search` is master §1707-1713's "GitHub" integration,
@@ -711,6 +744,7 @@ uv run acr tools expose "task description" [--max-tools N]
 uv run acr tools invoke <name> --query "..." [--limit N]   # permission + safe-mode checked
 uv run acr tools fetch <url> [--max-chars N]                # http(s) GET + text extraction
 uv run acr tools github-search "<query>" [--limit N]         # read-only, via the gh CLI
+uv run acr tools browse <url> [--max-chars N]                # real headless-browser render
 uv run acr safe-mode                       # show whether ACR_SAFE_MODE is on
 uv run acr security scan "text"            # prompt-injection heuristic scanner
 uv run acr security audit [--limit N]      # recent audit events
@@ -740,17 +774,16 @@ plus `acr.learning.distillation` as a real caller) — no
 
 ## Next milestone
 
-Phase 13 continued — Integrations: MCP server exposure, web-fetch, and
-read-only GitHub search are done (above); the generic MCP server is the de
-facto Claude Code/Codex integration point (either can connect to `acr mcp
-serve` as any MCP client would) — no bespoke per-client integration built,
-since their exact config formats weren't verified and shouldn't be guessed
-at. Remaining sub-slices: real interactive browser automation (Playwright
-— dependency can be added freely, but the actual ~100-300MB Chromium
-binary download needs explicit sign-off at the moment it would happen,
-per the user's standing answer), and desktop app (a Tauri packaging
-effort — see the master's Tauri note around §1385 — deliberately deferred
-per explicit user decision; large enough to deserve its own scoping
-conversation later). After Phase 13 wraps, next is Phase 14 — Public
-Launch (website, docs, GitHub repo presentation, downloads, support link
-— master §1714-1720), per explicit user decision.
+Phase 13 is functionally complete: MCP server exposure, web-fetch, real
+browser automation, and read-only GitHub search are all done (above). The
+generic MCP server is the de facto Claude Code/Codex integration point
+(either can connect to `acr mcp serve` as any MCP client would) — no
+bespoke per-client integration built, since their exact config formats
+weren't verified and shouldn't be guessed at. Desktop app (a Tauri
+packaging effort — see the master's Tauri note around §1385) was
+deliberately deferred per explicit user decision — large enough to
+deserve its own scoping conversation whenever it's picked up, not an
+assumed default.
+
+Next: Phase 14 — Public Launch (website, docs, GitHub repo presentation,
+downloads, support link — master §1714-1720), per explicit user decision.

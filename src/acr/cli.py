@@ -68,6 +68,7 @@ from acr.skills.search import SkillSearchResult, search
 from acr.skills.validation import ValidationReport, run_validation
 from acr.telemetry.models import TelemetryEvent
 from acr.telemetry.recorder import TelemetryRecorder
+from acr.tools.browser import BrowserNotInstalledError
 from acr.tools.default_tools import build_default_registry
 from acr.tools.exposure import expose_tools
 from acr.tools.github_search import GhCliError, GhCliNotFoundError, GhCliTimeoutError
@@ -556,6 +557,50 @@ def tools_github_search(
         typer.echo(f"{item['repository']}#{item['number']} ({kind}, {item['state']}){flag}")
         typer.echo(f"  {item['title']}")
         typer.echo(f"  {item['url']}")
+
+
+@tools_app.command("browse")
+def tools_browse(
+    url: str = typer.Argument(..., help="http(s) URL to render in a real headless browser."),
+    max_chars: int = typer.Option(4000, "--max-chars"),
+) -> None:
+    """Render a URL and print its visible text, including JS-rendered content."""
+    settings = get_settings()
+    registry = build_default_registry()
+
+    async def _browse() -> object:
+        async with session_scope(settings) as session:
+            result = await invoke_tool(
+                session,
+                registry,
+                "browser_fetch",
+                grants=_CLI_OPERATOR_GRANTS,
+                telemetry=TelemetryRecorder(),
+                safe_mode=settings.safe_mode,
+                url=url,
+                max_chars=max_chars,
+            )
+            await session.commit()
+            return result
+
+    try:
+        result = asyncio.run(_browse())
+    except InvalidUrlError as exc:
+        typer.echo(f"invalid url: {exc}")
+        raise typer.Exit(code=1) from exc
+    except BrowserNotInstalledError as exc:
+        typer.echo(f"browser not installed: {exc}")
+        raise typer.Exit(code=1) from exc
+    except (PermissionDeniedError, SafeModeError) as exc:
+        typer.echo(f"denied: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    assert isinstance(result, dict)
+    if result["suspicious"]:
+        typer.echo(f"[WARN] suspicious content detected: {result['matched_patterns']}")
+    truncated_note = " [truncated]" if result["truncated"] else ""
+    typer.echo(f"{result['title']} — {result['url']} ({result['status_code']}){truncated_note}")
+    typer.echo(result["text"])
 
 
 @app.command("safe-mode")

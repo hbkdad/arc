@@ -124,6 +124,27 @@ def create_mcp_server(settings: Settings | None = None) -> MCPServer:
             await session.commit()
             return result
 
+    @server.tool(
+        description=(
+            "Render a URL in a real headless browser and return its visible text, "
+            "including JS-rendered content web_fetch can't see."
+        )
+    )
+    async def browser_fetch(url: str, max_chars: int = 4000) -> dict[str, Any]:
+        async with _session() as session:
+            telemetry = TelemetryRecorder()
+            result = await invoke_tool(
+                session,
+                registry,
+                "browser_fetch",
+                grants=_MCP_GRANTS,
+                telemetry=telemetry,
+                url=url,
+                max_chars=max_chars,
+            )
+            await session.commit()
+            return result
+
     @server.tool(description="Run an objective through ACR's task engine (mock provider).")
     async def run_task(objective: str) -> dict[str, Any]:
         async with _session() as session:

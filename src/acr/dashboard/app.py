@@ -1,20 +1,28 @@
-"""ACR operational dashboard (master §1225-1240).
+"""ACR operational dashboard (master §1225-1240) and visualization (§1242-1256).
 
 Server-rendered, read-only HTML views over subsystems that already exist —
 active tasks, agent activity, memory, skills, tool execution, security
 events, benchmarks, and system health. Plain tables, no charting library,
 no JS framework: "the dashboard must remain useful without advanced
-graphics" (§1240). Cinematic/3D visualization is a separate later phase
-(§1242 onward), not this one.
+graphics" (§1240).
+
+`/visualization` + `/api/graph` are the master §1242-1256 "cinematic
+visualization" milestone, scoped down to a hand-written Canvas2D scene
+(see `docs/ARCHITECTURE.md`'s Phase 12 section for why: it's real,
+telemetry-driven, and adds zero new dependencies — no Three.js download, no
+CDN script, consistent with every other phase's "no separate frontend
+build step" and ACR's local-first/offline-usable requirement).
 """
 
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Any
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,6 +36,7 @@ from acr.skills.registry import list_skills
 from acr.tools.default_tools import build_default_registry
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
+STATIC_DIR = Path(__file__).parent / "static"
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -38,6 +47,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
     app = FastAPI(title="ACR Dashboard")
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
     async def get_session() -> AsyncIterator[AsyncSession]:
         async with session_factory() as session:
@@ -172,5 +182,59 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "selected_type": event_type,
             },
         )
+
+    @app.get("/visualization", response_class=HTMLResponse)
+    async def visualization(request: Request) -> HTMLResponse:
+        return templates.TemplateResponse(
+            request, "visualization.html", {"active": "visualization"}
+        )
+
+    @app.get("/api/graph")
+    async def api_graph(session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
+        """Real telemetry for `/visualization` to draw — no synthetic/random data.
+
+        Every list here is a direct, small projection of an existing
+        `acr.dashboard.queries` read: memory node clusters (type + count),
+        recent tasks (state pulses), recent agent spawns (topology), and the
+        raw event feed (token/activity flow). The frontend polls this on an
+        interval rather than the server pushing over a websocket — simplest
+        thing that's still genuinely live, no new transport to maintain.
+        """
+        memory_counts = await queries.memory_type_counts(session)
+        tasks = await queries.recent_tasks(session, limit=15)
+        agent_records = await queries.recent_topology(session, limit=15)
+        events = await queries.recent_events(session, limit=40)
+        return {
+            "memory_types": [
+                {"type": type_, "count": count} for type_, count in memory_counts.items()
+            ],
+            "tasks": [
+                {
+                    "id": t.id,
+                    "objective": t.objective,
+                    "status": t.status.value,
+                    "updated_at": t.updated_at.isoformat(),
+                }
+                for t in tasks
+            ],
+            "agents": [
+                {
+                    "task_class": a.task_class,
+                    "worker_count": a.worker_count,
+                    "quality_score": a.quality_score,
+                    "succeeded": a.succeeded,
+                    "created_at": a.created_at.isoformat(),
+                }
+                for a in agent_records
+            ],
+            "events": [
+                {
+                    "event_type": e.event_type,
+                    "task_id": e.task_id,
+                    "created_at": e.created_at.isoformat(),
+                }
+                for e in events
+            ],
+        }
 
     return app

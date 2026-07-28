@@ -162,6 +162,68 @@ async def test_benchmarks_page_lists_recent_runs(
     assert memory_recall.SUITE_NAME in response.text
 
 
+async def test_visualization_page_renders_the_canvas_and_script(
+    migrated_settings: Settings,
+) -> None:
+    response = _client(migrated_settings).get("/visualization")
+
+    assert response.status_code == 200
+    assert '<canvas id="graph"' in response.text
+    assert "/static/visualization.js" in response.text
+
+
+async def test_visualization_static_asset_is_served(migrated_settings: Settings) -> None:
+    response = _client(migrated_settings).get("/static/visualization.js")
+
+    assert response.status_code == 200
+    assert "api/graph" in response.text
+
+
+async def test_api_graph_reflects_real_seeded_data(
+    migrated_settings: Settings, db_session: AsyncSession
+) -> None:
+    await run_task(db_session, "say hello", MockProvider(), TelemetryRecorder())
+    await remember(
+        db_session,
+        MemoryCandidate(
+            type=MemoryType.SEMANTIC,
+            scope=MemoryScope.PROJECT,
+            subject="acr.dashboard",
+            content="graph data comes from real queries",
+            source_type="session",
+            confidence=0.9,
+            evidence="observed directly",
+        ),
+    )
+    await record_topology(
+        db_session,
+        task_class="research",
+        worker_count=2,
+        model_names=["mock"],
+        skill_ids=[],
+        quality_score=0.75,
+        succeeded=True,
+    )
+    await db_session.commit()
+
+    response = _client(migrated_settings).get("/api/graph")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert {"type": "semantic", "count": 1} in body["memory_types"]
+    assert any(t["objective"] == "say hello" for t in body["tasks"])
+    assert any(a["task_class"] == "research" and a["succeeded"] is True for a in body["agents"])
+    assert any(e["event_type"] == "task.created" for e in body["events"])
+
+
+async def test_api_graph_is_empty_but_valid_with_no_data(migrated_settings: Settings) -> None:
+    response = _client(migrated_settings).get("/api/graph")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body == {"memory_types": [], "tasks": [], "agents": [], "events": []}
+
+
 async def test_events_page_filters_by_event_type(
     migrated_settings: Settings, db_session: AsyncSession
 ) -> None:

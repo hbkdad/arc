@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Cognitive graph</h1>
+<p>
+  Live, polling <code>/api/graph</code> every 2s. Rings = memory, radiating by
+  <code>type</code> and sized by count. Squares = recent tasks, colored by
+  status. Diamonds = recent agent spawns. A flash on the timeline at the
+  bottom marks each new telemetry event as it lands.
+</p>
+<canvas id="graph" width="900" height="560" style="width:100%; max-width:900px; border:1px solid #8884; border-radius:8px; background:#00000008;"></canvas>
+<p id="graph-status" class="empty">connecting…</p>
+<script src="/static/visualization.js"></script>
+{% endblock %}

@@ -12,12 +12,12 @@ A modular monorepo: `apps/` (api, dashboard, website, desktop), `packages/`
 `tools/`, `learning/`, `telemetry/`, `security/`), plus `benchmarks/`,
 `migrations/`, `tests/`, `scripts/`, `examples/`, `docs/`.
 
-## Current shape (Phase 0 Foundation + Phase 1 Execution + Phase 2 Memory + Phase 3 Context + Phase 4 Skills + Phase 5 Evaluation + Phase 6 Routing + Phase 7 Security + Phase 8 Learning + Phase 9 Skill Evolution + Phase 10 Agents + Phase 11 Dashboard)
+## Current shape (Phase 0 Foundation + Phase 1 Execution + Phase 2 Memory + Phase 3 Context + Phase 4 Skills + Phase 5 Evaluation + Phase 6 Routing + Phase 7 Security + Phase 8 Learning + Phase 9 Skill Evolution + Phase 10 Agents + Phase 11 Dashboard + Phase 12 Visualization)
 
 Only the Python CLI foundation, task engine, memory system, context compiler,
 skill system, evaluation system, model/tool routing, security layer,
-learning system, skill validation/evolution, agents, and the operational
-dashboard exist. See
+learning system, skill validation/evolution, agents, the operational
+dashboard, and a real-telemetry visualization exist. See
 [`docs/adr/0001-src-layout-single-package.md`](adr/0001-src-layout-single-package.md)
 for why this is one `src/acr/` package rather than the full multi-directory
 tree, and when to split it.
@@ -35,7 +35,8 @@ acrtest/
 │       ├── 6c384104b66a_memory_records_and_fts5.py
 │       ├── 83b4d32aa8f2_skills_registry_and_fts5.py
 │       ├── 5a8d4f37fff6_benchmark_runs.py
-│       └── 90f73bb6afb3_agent_topology_records.py
+│       ├── 90f73bb6afb3_agent_topology_records.py
+│       └── ac998e062cab_hot_path_indexes.py
 ├── src/acr/
 │   ├── __init__.py        # __version__
 │   ├── config.py          # Settings (pydantic-settings, ACR_* env / .env)
@@ -116,9 +117,11 @@ acrtest/
 │   │   ├── critic.py           # review_agent_task(): reuses Phase 5's evaluation panel
 │   │   └── topology.py         # AgentTopologyRecord, record_topology()/recommend_topology()
 │   └── dashboard/
-│       ├── queries.py          # read-only SELECTs backing every dashboard view
+│       ├── queries.py          # read-only SELECTs backing every dashboard/visualization view
 │       ├── app.py              # create_app(): FastAPI + Jinja2, one route per operational view
-│       └── templates/          # base.html + one template per view, plain tables, no JS framework
+│       ├── templates/          # base.html + one template per view, plain tables, no JS framework
+│       └── static/
+│           └── visualization.js  # hand-written Canvas2D scene, polls /api/graph, no library
 ├── tests/
 │   ├── fixtures/skills/       # sqlite-diagnostics (valid), broken-skill (invalid manifest)
 │   ├── conftest.py         # isolated_env / settings / migrated_settings / db_session
@@ -542,6 +545,47 @@ gets its own `AsyncSession` from a request-scoped FastAPI dependency
 the same SQLite file `acr run`/`acr skills ...`/etc. write to, live, with
 no polling or caching layer.
 
+## Visualization (Phase 12)
+
+Master §1242-1256 asks for a "cinematic," "3D cognitive graph" visualization
+layer driven by real telemetry. This phase implements the "driven by real
+telemetry" requirement in full and deliberately scopes down the rendering
+technology — a documented decision, the same way ADR-0001 documents
+deviating from the master's literal directory tree, not a silent
+reinterpretation:
+
+- **No Three.js / WebGL library.** Vendoring one means downloading and
+  committing a third-party binary/minified file — a real action, not a
+  free one, and out of scope to do without asking. A CDN `<script>` tag
+  avoids the download but adds a hard network dependency to a page that's
+  supposed to work fully offline, breaking the local-first requirement
+  every other phase has treated as non-negotiable (the mock provider needs
+  zero config, Ollama is localhost-only, there's no cloud dependency
+  anywhere else in the stack).
+- **Hand-written Canvas2D instead.** `acr/dashboard/static/visualization.js`
+  is the entire rendering stack: no dependency, no build step, no CDN —
+  consistent with every other phase's "ship what you can run with `uv
+  run`, nothing else to install."
+
+`GET /api/graph` (`acr.dashboard.app`) is the one new read path: a JSON
+projection of `acr.dashboard.queries.memory_type_counts()`,
+`recent_tasks()`, `recent_topology()`, and `recent_events()` — the exact
+same data the plain-table dashboard already renders, just serialized for
+the frontend to poll instead of embedded in server-rendered HTML. No
+synthetic/randomized data anywhere: what's on screen is what's actually in
+`acr.db`.
+
+`GET /visualization` renders a `<canvas>` and loads the script. The scene:
+a center "core" that idle-pulses continuously (master's own described
+idle-state effect) and flashes when a new telemetry event arrives since
+the last poll; memory-type nodes arranged radially around the core, sized
+by record count; recent tasks as status-colored squares; recent agent
+spawns as quality/succeeded-encoded diamonds; and a scrolling event-flow
+timeline along the bottom. Polling (`fetch` every 2s), not a websocket —
+the simplest transport that's still genuinely live, and there's no
+existing push/streaming infrastructure this phase would otherwise have to
+invent just to serve one page.
+
 ## Commands available today
 
 ```bash
@@ -577,7 +621,7 @@ uv run acr skills rollback-evolution <active-id> <restore-id>
 uv run acr agents plan "objective" [--task-class X]        # AgentSpec via real routing + exposure
 uv run acr agents spawn "objective" [--force]               # estimate -> run_task() -> critic review
 uv run acr agents topology <task-class>                     # evidence-gated worker-count recommendation
-uv run acr dashboard serve [--host --port]   # operational dashboard: http://127.0.0.1:8765
+uv run acr dashboard serve [--host --port]   # dashboard + /visualization: http://127.0.0.1:8765
 uv run alembic upgrade head
 uv run pytest
 uv run ruff check .
@@ -591,7 +635,10 @@ plus `acr.learning.distillation` as a real caller) — no
 
 ## Next milestone
 
-Phase 12 — Visualization: a separate, real-telemetry-driven cinematic layer
-(3D cognitive graph, live token flow, agent visualization, memory
-evolution) — explicitly distinct from the plain-table dashboard above, not
-a replacement for it (master §1242-1256+).
+Phase 13 — Integrations: MCP, Claude Code, Codex, GitHub, browser
+automation, desktop app (master §1707-1713). Likely needs its own
+sub-slicing when picked up — "desktop app" alone is a large, separate
+vertical (see the master's Tauri note around §1385) — so the first
+sub-slice should probably be MCP server exposure (the most natural,
+highest-leverage "integration" for a tool like this) rather than
+attempting the whole phase at once.

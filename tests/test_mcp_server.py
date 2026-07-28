@@ -84,6 +84,17 @@ async def test_run_task_tool_executes_a_real_task(migrated_settings: Settings) -
     assert body["status"] == "completed"
 
 
+async def test_web_fetch_tool_fetches_real_content(
+    migrated_settings: Settings, local_html_server: str
+) -> None:
+    server = create_mcp_server(migrated_settings)
+    result = await server.call_tool("web_fetch", {"url": local_html_server + "/"})
+
+    body = _structured(result)
+    assert "Hello" in body["text"]
+    assert body["status_code"] == 200
+
+
 async def test_memory_search_tool_is_audited(
     migrated_settings: Settings, db_session: AsyncSession
 ) -> None:

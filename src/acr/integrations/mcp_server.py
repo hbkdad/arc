@@ -2,15 +2,15 @@
 
 Exposes ACR's own capabilities to any MCP client (Claude Code, Claude
 Desktop, or anything else speaking the protocol) rather than building a new
-integration surface: `memory_search`/`skill_search` are the exact `ToolSpec`
-handlers Phase 6 already registered in `acr.tools.default_tools`, invoked
-through the same `acr.tools.invocation.invoke_tool()` permission+audit seam
-Phase 7 built — an external MCP client is a *more* untrusted caller than
-the CLI, not a less, so it goes through that check rather than around it.
-`run_task` mirrors exactly what `acr run` already does (the zero-config
-mock provider, no cost, no external calls) — real provider routing for
-MCP-triggered tasks is future work, same caveat the CLI's own `run`
-command carries today.
+integration surface: `memory_search`/`skill_search`/`web_fetch` are the
+exact `ToolSpec` handlers Phase 6/13's `acr.tools.default_tools` already
+registered, invoked through the same `acr.tools.invocation.invoke_tool()`
+permission+audit seam Phase 7 built — an external MCP client is a *more*
+untrusted caller than the CLI, not a less, so it goes through that check
+rather than around it. `run_task` mirrors exactly what `acr run` already
+does (the zero-config mock provider, no cost, no external calls) — real
+provider routing for MCP-triggered tasks is future work, same caveat the
+CLI's own `run` command carries today.
 """
 
 from __future__ import annotations
@@ -32,10 +32,12 @@ from acr.telemetry.recorder import TelemetryRecorder
 from acr.tools.default_tools import build_default_registry
 from acr.tools.invocation import invoke_tool
 
-# Read-only grants matching exactly what memory_search/skill_search declare
-# (master §1131-1149: default deny — an MCP client gets nothing beyond
-# what these two specific tools need, no destructive/write capability).
-_MCP_GRANTS = PermissionSet(frozenset({Capability.MEMORY_READ, Capability.SKILL_READ}))
+# Read-only grants matching exactly what memory_search/skill_search/web_fetch
+# declare (master §1131-1149: default deny — an MCP client gets nothing
+# beyond what these three specific tools need, no destructive/write capability).
+_MCP_GRANTS = PermissionSet(
+    frozenset({Capability.MEMORY_READ, Capability.SKILL_READ, Capability.NETWORK_READ})
+)
 
 
 def create_mcp_server(settings: Settings | None = None) -> MCPServer:
@@ -85,6 +87,22 @@ def create_mcp_server(settings: Settings | None = None) -> MCPServer:
                 telemetry=telemetry,
                 query=query,
                 limit=limit,
+            )
+            await session.commit()
+            return result
+
+    @server.tool(description="Fetch a URL over HTTP(S) and return its extracted text.")
+    async def web_fetch(url: str, max_chars: int = 4000) -> dict[str, Any]:
+        async with _session() as session:
+            telemetry = TelemetryRecorder()
+            result = await invoke_tool(
+                session,
+                registry,
+                "web_fetch",
+                grants=_MCP_GRANTS,
+                telemetry=telemetry,
+                url=url,
+                max_chars=max_chars,
             )
             await session.commit()
             return result

@@ -175,6 +175,18 @@ def test_tools_invoke_rejects_unknown_tool(migrated_settings: Settings) -> None:
     assert "unknown tool" in result.stdout
 
 
+def test_tools_fetch_runs_web_fetch(migrated_settings: Settings, local_html_server: str) -> None:
+    result = runner.invoke(app, ["tools", "fetch", local_html_server + "/"])
+    assert result.exit_code == 0
+    assert "Hello" in result.stdout
+
+
+def test_tools_fetch_rejects_a_non_http_url(migrated_settings: Settings) -> None:
+    result = runner.invoke(app, ["tools", "fetch", "file:///etc/passwd"])
+    assert result.exit_code == 1
+    assert "invalid url" in result.stdout
+
+
 def test_safe_mode_status_reports_off_by_default(migrated_settings: Settings) -> None:
     result = runner.invoke(app, ["safe-mode"])
     assert result.exit_code == 0

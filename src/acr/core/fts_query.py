@@ -84,7 +84,14 @@ _STOPWORDS = frozenset(
 )
 
 
+def tokenize(text: str) -> list[str]:
+    """Stopword-filtered word tokens (original casing preserved) — the
+    shared vocabulary every keyword-relevance comparison in ACR (FTS
+    search, tool exposure) builds on, so "does this text meaningfully
+    overlap with that text" means the same thing everywhere."""
+    return [t for t in _TOKEN_PATTERN.findall(text) if t.lower() not in _STOPWORDS]
+
+
 def build_match_query(query: str) -> str:
     """Build a safe, OR-joined FTS5 MATCH query. Empty for an all-stopword input."""
-    tokens = [t for t in _TOKEN_PATTERN.findall(query) if t.lower() not in _STOPWORDS]
-    return " OR ".join(f'"{token}"' for token in tokens)
+    return " OR ".join(f'"{token}"' for token in tokenize(query))

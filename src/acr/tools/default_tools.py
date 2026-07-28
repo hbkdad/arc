@@ -14,6 +14,7 @@ from acr.memory.retrieval import retrieve
 from acr.skills.search import search as skill_search
 from acr.tools.models import SideEffectLevel, ToolSpec
 from acr.tools.registry import ToolRegistry
+from acr.tools.web_fetch import WEB_FETCH
 
 
 async def _memory_search_handler(
@@ -64,4 +65,5 @@ def build_default_registry() -> ToolRegistry:
     registry = ToolRegistry()
     registry.register(MEMORY_SEARCH)
     registry.register(SKILL_SEARCH)
+    registry.register(WEB_FETCH)
     return registry

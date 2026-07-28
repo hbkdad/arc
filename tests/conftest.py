@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import threading
 from collections.abc import AsyncIterator, Iterator
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -60,3 +62,30 @@ async def db_session(migrated_settings: Settings) -> AsyncIterator[AsyncSession]
     async with factory() as session:
         yield session
     await engine.dispose()
+
+
+class _FixedPageHandler(BaseHTTPRequestHandler):
+    """Serves a single, fixed HTML body — enough for web_fetch call sites
+    that only need *a* real HTTP response, not specific routing."""
+
+    def do_GET(self) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.end_headers()
+        self.wfile.write(b"<html><body><h1>Hello</h1><p>local test page</p></body></html>")
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass  # silence request logging during tests
+
+
+@pytest.fixture
+def local_html_server() -> Iterator[str]:
+    """Base URL of a real, ephemeral, localhost-only HTTP server."""
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _FixedPageHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        thread.join()

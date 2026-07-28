@@ -17,7 +17,8 @@ A modular monorepo: `apps/` (api, dashboard, website, desktop), `packages/`
 Only the Python CLI foundation, task engine, memory system, context compiler,
 skill system, evaluation system, model/tool routing, security layer,
 learning system, skill validation/evolution, agents, the operational
-dashboard, a real-telemetry visualization, and an MCP server exist. See
+dashboard, a real-telemetry visualization, an MCP server, and a web-fetch
+tool exist. See
 [`docs/adr/0001-src-layout-single-package.md`](adr/0001-src-layout-single-package.md)
 for why this is one `src/acr/` package rather than the full multi-directory
 tree, and when to split it.
@@ -94,7 +95,8 @@ acrtest/
 │   ├── tools/
 │   │   ├── models.py          # ToolSpec (master §827-838 field set), SideEffectLevel
 │   │   ├── registry.py        # in-memory ToolRegistry (tools are code, not user data)
-│   │   ├── default_tools.py    # real tools: memory_search, skill_search
+│   │   ├── default_tools.py    # real tools: memory_search, skill_search, web_fetch
+│   │   ├── web_fetch.py        # http(s) GET + stdlib HTML text extraction, injection-scanned
 │   │   ├── exposure.py         # expose_tools(): task-specific subset, min-relevance gated
 │   │   └── invocation.py       # invoke_tool(): permission + safe-mode check, audit-logged
 │   ├── security/
@@ -170,7 +172,8 @@ acrtest/
 │   ├── test_agents_planner_critic.py
 │   ├── test_agents_topology.py
 │   ├── test_dashboard.py
-│   └── test_mcp_server.py
+│   ├── test_mcp_server.py
+│   └── test_tools_web_fetch.py
 └── docs/
     ├── ARCHITECTURE.md     # this file
     └── adr/0001-src-layout-single-package.md
@@ -605,23 +608,57 @@ memory, skills, and task execution the moment this runs.
 
 `acr.integrations.mcp_server.create_mcp_server()` doesn't add a new
 integration surface's worth of business logic — it exposes what already
-exists through a new *transport*. `memory_search` and `skill_search` are
-the identical `ToolSpec` handlers Phase 6 registered in
-`acr.tools.default_tools`, invoked through the same
+exists through a new *transport*. `memory_search`, `skill_search`, and
+`web_fetch` are the identical `ToolSpec` handlers Phase 6/13's
+`acr.tools.default_tools` registered, invoked through the same
 `acr.tools.invocation.invoke_tool()` permission+audit seam Phase 7 built
 (an external MCP client is a *more* untrusted caller than the local CLI,
 not a less — it goes through that check rather than around it). The
-server's fixed grant set is exactly `{memory.read, skill.read}` — nothing
-beyond what those two read-only tools declare (master §1131-1149: default
-deny). `run_task` mirrors what `acr run` already does: the zero-config
-mock provider, no cost, no external calls — real provider routing for
-MCP-triggered tasks is future work, the same caveat the CLI's own `run`
-carries today.
+server's fixed grant set is exactly `{memory.read, skill.read,
+network.read}` — nothing beyond what those three read-only tools declare
+(master §1131-1149: default deny). `run_task` mirrors what `acr run`
+already does: the zero-config mock provider, no cost, no external calls —
+real provider routing for MCP-triggered tasks is future work, the same
+caveat the CLI's own `run` carries today.
 
 `acr mcp serve` defaults to stdio (how Claude Code/Desktop launch a local
 MCP server as a subprocess); `--transport sse` or `--transport
 streamable-http` with `--host`/`--port` serve it over HTTP instead. Both
 transports were manually smoke-tested end to end.
+
+### Web fetch tool
+
+`acr.tools.web_fetch` is master §1707-1713's "browser automation," scoped
+to a plain HTTP(S) GET plus stdlib `html.parser`-based text extraction —
+not a real browser. The user chose this explicitly over Playwright:
+real interactive browser automation needs to download a ~100-300MB
+Chromium binary on first use, which is a real action requiring sign-off,
+not something to trigger silently mid-build; `httpx` (already a
+dependency) needs nothing new to install. Fetched content is untrusted
+(master §1122-1130 — `RETRIEVED_CONTENT` trust tier, same as retrieved
+memory) and is run through `acr.security.injection.scan_for_injection()`
+before being returned — flagged via a `suspicious`/`matched_patterns`
+field, never silently blocked, same contract every other
+`scan_for_injection()` call site follows. Registered as a normal
+`ToolSpec` (`permissions=["network.read"]`,
+`side_effect_level=READ_ONLY`), so it goes through the exact same
+permission+audit path as every other tool — `acr tools fetch <url>` on the
+CLI, or `web_fetch` over MCP.
+
+Fixing this tool's tests surfaced a real, pre-existing bug in
+`acr.tools.exposure`: `_score()` tokenized on *every* word including
+stopwords, so a bare function word like "a" appearing in both a task
+description and an unrelated tool's description counted as "relevant"
+overlap (`"compile a container image"` matched `web_fetch` purely on the
+word "a"). Fixed by promoting `acr.core.fts_query`'s stopword-filtered
+tokenizer to a shared `tokenize()` function, used by both FTS search and
+tool exposure — the same "does this text meaningfully overlap with that
+text" question should mean the same thing everywhere in ACR. Filtering
+stopwords out of the query mechanically raises every remaining match's
+relative score, which pushed `_MIN_RELEVANCE` from `0.25` to `1/3` to
+keep a single shared *content* word (e.g. two tools both named
+`*_search`) from crossing the threshold on its own — the exact scenario
+the module's own docstring already described as the thing to prevent.
 
 ## Commands available today
 
@@ -644,6 +681,7 @@ uv run acr models route "prompt" [--min-quality-tier N]
 uv run acr tools list
 uv run acr tools expose "task description" [--max-tools N]
 uv run acr tools invoke <name> --query "..." [--limit N]   # permission + safe-mode checked
+uv run acr tools fetch <url> [--max-chars N]                # http(s) GET + text extraction
 uv run acr safe-mode                       # show whether ACR_SAFE_MODE is on
 uv run acr security scan "text"            # prompt-injection heuristic scanner
 uv run acr security audit [--limit N]      # recent audit events
@@ -673,9 +711,14 @@ plus `acr.learning.distillation` as a real caller) — no
 
 ## Next milestone
 
-Phase 13 continued — Integrations: MCP server exposure is done (above).
-Remaining sub-slices: Claude Code / Codex integration, GitHub (needs a
-token from the user — explicit sign-off required before touching
-credentials), browser automation, and desktop app (a Tauri packaging
+Phase 13 continued — Integrations: MCP server exposure and the web-fetch
+tool are done (above); the generic MCP server is the de facto Claude
+Code/Codex integration point (either can connect to `acr mcp serve` as any
+MCP client would) — no bespoke per-client integration built, since their
+exact config formats weren't verified and shouldn't be guessed at.
+Remaining sub-slices: GitHub (needs a token from the user — explicit
+sign-off required before touching credentials), real interactive browser
+automation (Playwright — needs a ~100-300MB binary download, explicit
+sign-off required when picked up), and desktop app (a Tauri packaging
 effort — see the master's Tauri note around §1385 — large enough it
 deserves its own scoping conversation, not an assumed default).

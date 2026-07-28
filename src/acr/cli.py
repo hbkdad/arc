@@ -73,6 +73,7 @@ from acr.tools.exposure import expose_tools
 from acr.tools.invocation import invoke_tool
 from acr.tools.models import ToolSpec
 from acr.tools.registry import ToolNotFoundError
+from acr.tools.web_fetch import InvalidUrlError
 
 app = typer.Typer(name="acr", help="ACR — Adaptive Cognitive Runtime", no_args_is_help=True)
 context_app = typer.Typer(name="context", help="Context compiler operations.")
@@ -423,10 +424,10 @@ def tools_expose(
 
 
 # The CLI operator's own local session: full read access to ACR's own
-# read-only search tools. Both `memory_search` and `skill_search` only need
-# these two capabilities (see their ToolSpec.permissions in default_tools.py).
+# read-only tools. memory_search/skill_search/web_fetch only need these
+# three capabilities (see each ToolSpec.permissions in default_tools.py).
 _CLI_OPERATOR_GRANTS = PermissionSet(
-    granted=frozenset({Capability.MEMORY_READ, Capability.SKILL_READ})
+    granted=frozenset({Capability.MEMORY_READ, Capability.SKILL_READ, Capability.NETWORK_READ})
 )
 
 
@@ -465,6 +466,47 @@ def tools_invoke(
         raise typer.Exit(code=1) from exc
 
     typer.echo(result)
+
+
+@tools_app.command("fetch")
+def tools_fetch(
+    url: str = typer.Argument(..., help="http(s) URL to fetch."),
+    max_chars: int = typer.Option(4000, "--max-chars"),
+) -> None:
+    """Fetch a URL and print its extracted text (master §1707-1713, browser automation)."""
+    settings = get_settings()
+    registry = build_default_registry()
+
+    async def _fetch() -> object:
+        async with session_scope(settings) as session:
+            result = await invoke_tool(
+                session,
+                registry,
+                "web_fetch",
+                grants=_CLI_OPERATOR_GRANTS,
+                telemetry=TelemetryRecorder(),
+                safe_mode=settings.safe_mode,
+                url=url,
+                max_chars=max_chars,
+            )
+            await session.commit()
+            return result
+
+    try:
+        result = asyncio.run(_fetch())
+    except InvalidUrlError as exc:
+        typer.echo(f"invalid url: {exc}")
+        raise typer.Exit(code=1) from exc
+    except (PermissionDeniedError, SafeModeError) as exc:
+        typer.echo(f"denied: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    assert isinstance(result, dict)
+    if result["suspicious"]:
+        typer.echo(f"[WARN] suspicious content detected: {result['matched_patterns']}")
+    truncated_note = " [truncated]" if result["truncated"] else ""
+    typer.echo(f"{result['url']} ({result['status_code']}){truncated_note}")
+    typer.echo(result["text"])
 
 
 @app.command("safe-mode")

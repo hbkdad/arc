@@ -12,10 +12,10 @@ A modular monorepo: `apps/` (api, dashboard, website, desktop), `packages/`
 `tools/`, `learning/`, `telemetry/`, `security/`), plus `benchmarks/`,
 `migrations/`, `tests/`, `scripts/`, `examples/`, `docs/`.
 
-## Current shape (Phase 0 Foundation + Phase 1 Execution + Phase 2 Memory + Phase 3 Context + Phase 4 Skills)
+## Current shape (Phase 0 Foundation + Phase 1 Execution + Phase 2 Memory + Phase 3 Context + Phase 4 Skills + Phase 5 Evaluation)
 
 Only the Python CLI foundation, task engine, memory system, context compiler,
-and skill system exist. See
+skill system, and evaluation system exist. See
 [`docs/adr/0001-src-layout-single-package.md`](adr/0001-src-layout-single-package.md)
 for why this is one `src/acr/` package rather than the full multi-directory
 tree, and when to split it.
@@ -31,7 +31,8 @@ acrtest/
 │       ├── 0dd629888bfd_baseline.py
 │       ├── 87b619c4e7ac_task_engine_and_telemetry_tables.py
 │       ├── 6c384104b66a_memory_records_and_fts5.py
-│       └── 83b4d32aa8f2_skills_registry_and_fts5.py
+│       ├── 83b4d32aa8f2_skills_registry_and_fts5.py
+│       └── 5a8d4f37fff6_benchmark_runs.py
 ├── src/acr/
 │   ├── __init__.py        # __version__
 │   ├── config.py          # Settings (pydantic-settings, ACR_* env / .env)
@@ -63,13 +64,23 @@ acrtest/
 │   │   ├── models.py         # ContextItem, ContextBundle
 │   │   ├── compiler.py        # compile_context(): discover->...->assemble pipeline
 │   │   └── attribution.py     # record_attribution(): feeds usage back into memory utility
-│   └── skills/
-│       ├── format.py         # SKILL.yaml manifest schema + loader
-│       ├── models.py          # SkillRecord + SkillStatus lifecycle rules
-│       ├── fts.py             # skills_fts virtual table + sync triggers
-│       ├── registry.py        # register()/get()/list_skills()/set_status()
-│       ├── search.py          # FTS keyword search over the registry
-│       └── routing.py         # route(): the master §685-696 8-step process
+│   ├── skills/
+│   │   ├── format.py         # SKILL.yaml manifest schema + loader
+│   │   ├── models.py          # SkillRecord + SkillStatus lifecycle rules
+│   │   ├── fts.py             # skills_fts virtual table + sync triggers
+│   │   ├── registry.py        # register()/get()/list_skills()/set_status()
+│   │   ├── search.py          # FTS keyword search over the registry
+│   │   └── routing.py         # route(): the master §685-696 8-step process
+│   ├── evaluation/
+│   │   ├── models.py          # EvaluationCriterion, CriterionScore, EvaluationResult
+│   │   ├── evaluators.py       # Evaluator ABC, ChecklistEvaluator, ExactMatchEvaluator
+│   │   ├── panel.py            # evaluate_with_panel(): majority-vote aggregation
+│   │   ├── regression.py       # detect_regression(): compare consecutive BenchmarkRuns
+│   │   └── waste_analyzer.py   # duplicate-memory + context-utilization detectors
+│   └── benchmarks/
+│       ├── models.py          # BenchmarkCase/CaseResult (in-memory), BenchmarkRun (persisted)
+│       ├── runner.py           # run_suite(): executes cases for real, persists a BenchmarkRun
+│       └── memory_recall.py    # a genuine memory-recall suite exercising Phase 2 code
 ├── tests/
 │   ├── fixtures/skills/       # sqlite-diagnostics (valid), broken-skill (invalid manifest)
 │   ├── conftest.py         # isolated_env / settings / migrated_settings / db_session
@@ -90,7 +101,11 @@ acrtest/
 │   ├── test_skill_format.py
 │   ├── test_skill_registry.py
 │   ├── test_skill_search.py
-│   └── test_skill_routing.py
+│   ├── test_skill_routing.py
+│   ├── test_evaluation.py
+│   ├── test_benchmarks.py
+│   ├── test_regression.py
+│   └── test_waste_analyzer.py
 └── docs/
     ├── ARCHITECTURE.md     # this file
     └── adr/0001-src-layout-single-package.md
@@ -191,6 +206,9 @@ already reads. Items that were offered but not used are left untouched
 (§464-465: not used ≠ useless). Skills aren't wired into the compiler yet
 (the bundle has no skill items to attribute), so `SkillRecord.successful_uses`/
 `failed_uses` (Phase 4 below) aren't updated by attribution today either.
+`record_attribution()` optionally takes a `TelemetryRecorder` + `task_id` and
+emits a `context.attribution` event (bundle/referenced token counts) — this
+is what Phase 5's waste analyzer reads to report context utilization.
 
 ## Skill system (Phase 4)
 
@@ -222,6 +240,34 @@ successful/total ratio a skill has earned) -> estimate token overhead
 `task_classes` are a subset of an already-kept, higher-scoring candidate's)
 -> return the top `max_skills`.
 
+## Evaluation system (Phase 5)
+
+`acr.evaluation.evaluators.Evaluator` is the interface every evaluator
+implements. `ChecklistEvaluator`/`ExactMatchEvaluator` are fully
+deterministic (master §1515: no paid model access required for the normal
+test suite) — an LLM-judge evaluator is a future `Evaluator` implementation,
+not a different interface. `panel.evaluate_with_panel()` runs every
+evaluator independently and aggregates by majority vote (master §1059: "Do
+not use one model's confidence as ground truth").
+
+`acr.benchmarks` cases are real, executable code, not fixture data with a
+hardcoded expected score — `memory_recall.py` seeds actual facts through
+`write_controller.remember()` and checks whether `retrieval.retrieve()`
+actually surfaces them (master §1090: never publish a fabricated result).
+`runner.run_suite()` persists one `BenchmarkRun` row per execution;
+`evaluation.regression.detect_regression()` compares the two most recent
+runs of a suite and flags a score drop past a threshold — a single run in
+isolation has no opinion about regression.
+
+`evaluation.waste_analyzer` has two detectors grounded in data ACR actually
+has: `find_duplicate_memories()` (byte-identical memory content stored under
+different subjects — `write_controller` already prevents duplicates *within*
+one subject/scope/type) and `analyze_context_utilization()` (aggregates
+`context.attribution` telemetry into a referenced/compiled token ratio). The
+other master §1026-1039 waste categories (oversized system prompts, unused
+tool/skill definitions, excessive agent coordination) need subsystems that
+don't exist yet and are deliberately not stubbed.
+
 ## Commands available today
 
 ```bash
@@ -234,6 +280,10 @@ uv run acr skills list [--status active]
 uv run acr skills search "query"
 uv run acr skills activate <id> --status active   # manual lifecycle transition
 uv run acr skills route "task description" [--task-class X]
+uv run acr benchmark run memory-recall     # execute a suite for real, persist the run
+uv run acr benchmark history memory-recall # compare the two most recent runs
+uv run acr waste duplicates                # duplicate memory content across subjects
+uv run acr waste utilization               # compiled vs. referenced context tokens
 uv run alembic upgrade head
 uv run pytest
 uv run ruff check .
@@ -247,5 +297,5 @@ to write memory from outside a test, e.g. experience distillation (Phase 8).
 
 ## Next milestone
 
-Phase 5 — Evaluation: evaluators, benchmarks, regression detection, waste
-analysis (master §1026-1090).
+Phase 6 — Model and Tool Routing: model router, Ollama, external providers,
+tool registry, dynamic tool exposure (master §794-925).

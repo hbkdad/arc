@@ -13,6 +13,9 @@ from pathlib import Path
 import typer
 
 from acr import __version__
+from acr.benchmarks import memory_recall
+from acr.benchmarks.models import BenchmarkRun
+from acr.benchmarks.runner import run_suite
 from acr.config import get_settings
 from acr.context.compiler import compile_context
 from acr.context.models import ContextBundle
@@ -20,6 +23,14 @@ from acr.core.execution import run_task
 from acr.core.tasks.models import Task, TaskStatus
 from acr.db.base import session_scope
 from acr.doctor import CheckStatus, run_checks
+from acr.evaluation.evaluators import ExactMatchEvaluator
+from acr.evaluation.regression import RegressionReport, detect_regression
+from acr.evaluation.waste_analyzer import (
+    DuplicateGroup,
+    UtilizationReport,
+    analyze_context_utilization,
+    find_duplicate_memories,
+)
 from acr.logging import configure_logging, get_logger
 from acr.providers.mock import MockProvider
 from acr.skills.models import SkillRecord, SkillStatus
@@ -31,8 +42,19 @@ from acr.telemetry.recorder import TelemetryRecorder
 app = typer.Typer(name="acr", help="ACR — Adaptive Cognitive Runtime", no_args_is_help=True)
 context_app = typer.Typer(name="context", help="Context compiler operations.")
 skills_app = typer.Typer(name="skills", help="Skill registry operations.")
+benchmark_app = typer.Typer(name="benchmark", help="Benchmark suites.")
+waste_app = typer.Typer(name="waste", help="Token waste analysis.")
 app.add_typer(context_app)
 app.add_typer(skills_app)
+app.add_typer(benchmark_app)
+app.add_typer(waste_app)
+
+# Every registered benchmark suite: name -> (seed, build_cases). Only one
+# exists today (master principle #23: no feature expansion without
+# something real to measure) — more land as the subsystems they benchmark do.
+_BENCHMARK_SUITES = {
+    memory_recall.SUITE_NAME: (memory_recall.seed, memory_recall.build_cases),
+}
 
 _STATUS_SYMBOL = {
     CheckStatus.OK: "[OK]  ",
@@ -204,6 +226,84 @@ def skills_route(
 
     for routed in asyncio.run(_route()):
         typer.echo(f"{routed.record.id}\t{routed.selection_reason}")
+
+
+@benchmark_app.command("run")
+def benchmark_run(
+    suite: str = typer.Argument(..., help="Benchmark suite name (e.g. memory-recall)."),
+) -> None:
+    """Run a benchmark suite for real and persist the result."""
+    if suite not in _BENCHMARK_SUITES:
+        typer.echo(f"unknown suite {suite!r}; available: {', '.join(_BENCHMARK_SUITES)}")
+        raise typer.Exit(code=1)
+    seed_fn, build_cases_fn = _BENCHMARK_SUITES[suite]
+    settings = get_settings()
+
+    async def _run() -> BenchmarkRun:
+        async with session_scope(settings) as session:
+            await seed_fn(session)
+            cases = build_cases_fn(session)
+            benchmark_run_record = await run_suite(session, suite, cases, ExactMatchEvaluator())
+            await session.commit()
+            return benchmark_run_record
+
+    result = asyncio.run(_run())
+    typer.echo(
+        f"{result.suite_name}: {result.passed_cases}/{result.total_cases} passed, "
+        f"score={result.score:.2f}"
+    )
+    if result.passed_cases < result.total_cases:
+        raise typer.Exit(code=1)
+
+
+@benchmark_app.command("history")
+def benchmark_history(
+    suite: str = typer.Argument(..., help="Benchmark suite name."),
+) -> None:
+    """Compare the two most recent runs of a suite and report regression."""
+    settings = get_settings()
+
+    async def _history() -> RegressionReport:
+        async with session_scope(settings) as session:
+            return await detect_regression(session, suite)
+
+    report = asyncio.run(_history())
+    typer.echo(report.detail)
+    if report.regressed:
+        raise typer.Exit(code=1)
+
+
+@waste_app.command("duplicates")
+def waste_duplicates() -> None:
+    """List memory content duplicated across different subjects."""
+    settings = get_settings()
+
+    async def _duplicates() -> list[DuplicateGroup]:
+        async with session_scope(settings) as session:
+            return await find_duplicate_memories(session)
+
+    groups = asyncio.run(_duplicates())
+    if not groups:
+        typer.echo("no duplicate memory content found")
+        return
+    for group in groups:
+        typer.echo(f"{len(group.record_ids)}x  {group.content[:80]!r}")
+
+
+@waste_app.command("utilization")
+def waste_utilization() -> None:
+    """Report what fraction of compiled context tokens actually got used."""
+    settings = get_settings()
+
+    async def _utilization() -> UtilizationReport:
+        async with session_scope(settings) as session:
+            return await analyze_context_utilization(session)
+
+    report = asyncio.run(_utilization())
+    typer.echo(
+        f"samples={report.sample_count} utilization={report.utilization:.2%} "
+        f"wasted_tokens={report.wasted_tokens}"
+    )
 
 
 if __name__ == "__main__":

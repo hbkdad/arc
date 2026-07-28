@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from acr.context.models import ContextBundle, ContextItem, ContextSource
 from acr.memory.models import MemoryRecord
+from acr.telemetry.recorder import TelemetryRecorder
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,12 +36,19 @@ async def record_attribution(
     *,
     used_item_ids: set[str],
     success: bool,
+    telemetry: TelemetryRecorder | None = None,
+    task_id: str | None = None,
 ) -> AttributionResult:
     """Mark which bundle items were used and update their source's utility.
 
     `success` is the outcome of the task that consumed `bundle`: a used
     item's owning record gets `successful_uses` or `failed_uses`
     incremented, and `utility_score` recomputed from the new ratio.
+
+    If `telemetry` is given, also emits a `context.attribution` event
+    (bundle/referenced token counts) — this is what
+    `acr.evaluation.waste_analyzer.analyze_context_utilization` reads to
+    report unused-context waste (master §1027) over time.
     """
     referenced = [item for item in bundle.items if item.id in used_item_ids]
     ignored = [item for item in bundle.items if item.id not in used_item_ids]
@@ -59,5 +67,18 @@ async def record_attribution(
                 record.failed_uses += 1
             total = record.successful_uses + record.failed_uses
             record.utility_score = record.successful_uses / total if total else 0.0
+
+    if telemetry is not None:
+        await telemetry.emit(
+            session,
+            "context.attribution",
+            task_id=task_id,
+            payload={
+                "bundle_tokens": bundle.total_tokens,
+                "referenced_tokens": sum(item.token_cost for item in referenced),
+                "referenced_count": len(referenced),
+                "ignored_count": len(ignored),
+            },
+        )
 
     return AttributionResult(referenced=referenced, ignored=ignored)

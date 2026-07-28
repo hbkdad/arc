@@ -8,10 +8,10 @@ from pathlib import Path
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from acr.config import Settings, get_settings
-
 # Imported for side effects only: registers each domain's ORM tables on
 # Base.metadata before any fixture calls Base.metadata.create_all().
+from acr.benchmarks import models as _benchmark_models  # noqa: F401
+from acr.config import Settings, get_settings
 from acr.core.tasks import models as _task_models  # noqa: F401
 from acr.db.base import Base, make_engine, make_session_factory
 from acr.memory import models as _memory_models  # noqa: F401

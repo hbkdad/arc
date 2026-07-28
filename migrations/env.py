@@ -6,10 +6,10 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-from acr.config import get_settings
-
 # Imported for side effects only: registers each domain's ORM tables on
 # Base.metadata so `alembic revision --autogenerate` can see them.
+from acr.benchmarks import models as _benchmark_models  # noqa: F401
+from acr.config import get_settings
 from acr.core.tasks import models as _task_models  # noqa: F401
 from acr.db.base import Base
 from acr.memory import models as _memory_models  # noqa: F401

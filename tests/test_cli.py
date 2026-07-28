@@ -83,3 +83,32 @@ def test_skills_search_and_route(migrated_settings: Settings) -> None:
     )
     assert route_result.exit_code == 0
     assert "sqlite-diagnostics" in route_result.stdout
+
+
+def test_benchmark_run_and_history(migrated_settings: Settings) -> None:
+    first = runner.invoke(app, ["benchmark", "run", "memory-recall"])
+    assert first.exit_code == 0
+    assert "memory-recall" in first.stdout
+
+    second = runner.invoke(app, ["benchmark", "run", "memory-recall"])
+    assert second.exit_code == 0
+
+    history = runner.invoke(app, ["benchmark", "history", "memory-recall"])
+    assert history.exit_code == 0
+    assert "score" in history.stdout
+
+
+def test_benchmark_run_rejects_unknown_suite(migrated_settings: Settings) -> None:
+    result = runner.invoke(app, ["benchmark", "run", "does-not-exist"])
+    assert result.exit_code == 1
+    assert "unknown suite" in result.stdout
+
+
+def test_waste_commands_run_cleanly_with_no_history(migrated_settings: Settings) -> None:
+    duplicates = runner.invoke(app, ["waste", "duplicates"])
+    assert duplicates.exit_code == 0
+    assert "no duplicate" in duplicates.stdout
+
+    utilization = runner.invoke(app, ["waste", "utilization"])
+    assert utilization.exit_code == 0
+    assert "utilization=" in utilization.stdout

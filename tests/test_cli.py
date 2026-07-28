@@ -329,3 +329,37 @@ def test_skills_evolve_reports_unknown_baseline_cleanly(migrated_settings: Setti
     result = runner.invoke(app, ["skills", "evolve", "does-not-exist"])
     assert result.exit_code == 1
     assert "unknown skill" in result.stdout
+
+
+def test_agents_plan_reports_spec_and_estimate(migrated_settings: Settings) -> None:
+    result = runner.invoke(app, ["agents", "plan", "compile a container image"])
+    assert result.exit_code == 0
+    assert "agent-" in result.stdout
+    assert "estimate:" in result.stdout
+
+
+def test_agents_spawn_runs_end_to_end_with_force(migrated_settings: Settings) -> None:
+    result = runner.invoke(app, ["agents", "spawn", "say hello", "--force"])
+    assert result.exit_code == 0
+    assert "completed" in result.stdout
+    assert "review: passed=True" in result.stdout
+
+
+def test_agents_spawn_without_force_may_decline_an_unscoped_objective(
+    migrated_settings: Settings,
+) -> None:
+    # An unscoped objective (no matching skills/tools) has a low quality
+    # gain estimate and no overhead to offset it either — this just
+    # verifies the command runs cleanly in both outcomes, not which one.
+    result = runner.invoke(app, ["agents", "spawn", "say hello"])
+    assert result.exit_code in (0, 1)
+    if result.exit_code == 0:
+        assert "review:" in result.stdout
+    else:
+        assert "not spawned" in result.stdout
+
+
+def test_agents_topology_reports_no_evidence_initially(migrated_settings: Settings) -> None:
+    result = runner.invoke(app, ["agents", "topology", "research"])
+    assert result.exit_code == 0
+    assert "no recommendation" in result.stdout

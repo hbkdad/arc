@@ -12,11 +12,11 @@ A modular monorepo: `apps/` (api, dashboard, website, desktop), `packages/`
 `tools/`, `learning/`, `telemetry/`, `security/`), plus `benchmarks/`,
 `migrations/`, `tests/`, `scripts/`, `examples/`, `docs/`.
 
-## Current shape (Phase 0 Foundation + Phase 1 Execution + Phase 2 Memory + Phase 3 Context + Phase 4 Skills + Phase 5 Evaluation + Phase 6 Routing + Phase 7 Security + Phase 8 Learning + Phase 9 Skill Evolution)
+## Current shape (Phase 0 Foundation + Phase 1 Execution + Phase 2 Memory + Phase 3 Context + Phase 4 Skills + Phase 5 Evaluation + Phase 6 Routing + Phase 7 Security + Phase 8 Learning + Phase 9 Skill Evolution + Phase 10 Agents)
 
 Only the Python CLI foundation, task engine, memory system, context compiler,
 skill system, evaluation system, model/tool routing, security layer,
-learning system, and skill validation/evolution exist. See
+learning system, skill validation/evolution, and agents exist. See
 [`docs/adr/0001-src-layout-single-package.md`](adr/0001-src-layout-single-package.md)
 for why this is one `src/acr/` package rather than the full multi-directory
 tree, and when to split it.
@@ -33,7 +33,8 @@ acrtest/
 │       ├── 87b619c4e7ac_task_engine_and_telemetry_tables.py
 │       ├── 6c384104b66a_memory_records_and_fts5.py
 │       ├── 83b4d32aa8f2_skills_registry_and_fts5.py
-│       └── 5a8d4f37fff6_benchmark_runs.py
+│       ├── 5a8d4f37fff6_benchmark_runs.py
+│       └── 90f73bb6afb3_agent_topology_records.py
 ├── src/acr/
 │   ├── __init__.py        # __version__
 │   ├── config.py          # Settings (pydantic-settings, ACR_* env / .env)
@@ -102,11 +103,17 @@ acrtest/
 │   │   ├── sandbox.py          # SandboxPolicy, build_sandboxed_env() (env allowlist + redact)
 │   │   ├── safe_mode.py        # SafeModeError, require_not_safe_mode()
 │   │   └── audit.py            # record_audit_event()/recent_audit_events() (via telemetry)
-│   └── learning/
-│       ├── distillation.py     # distill_task()/distill_and_remember(): trace -> memory candidate
-│       ├── utility.py          # record_skill_outcome(): SkillRecord successful_uses/reliability
-│       ├── promotion.py        # promote_candidates(): CANDIDATE -> CONFIRMED on earned utility
-│       └── skill_generation.py # detect_repeated_successes()/generate_candidate_skill()
+│   ├── learning/
+│   │   ├── distillation.py     # distill_task()/distill_and_remember(): trace -> memory candidate
+│   │   ├── utility.py          # record_skill_outcome(): SkillRecord successful_uses/reliability
+│   │   ├── promotion.py        # promote_candidates(): CANDIDATE -> CONFIRMED on earned utility
+│   │   └── skill_generation.py # detect_repeated_successes()/generate_candidate_skill()
+│   └── agents/
+│       ├── models.py           # AgentSpec (master §749-763 field set), SpawnEstimate
+│       ├── factory.py          # estimate_spawn()/spawn_agent(): cost/value gate, runs via run_task()
+│       ├── planner.py          # plan_agent(): real skill routing + tool exposure for a spec
+│       ├── critic.py           # review_agent_task(): reuses Phase 5's evaluation panel
+│       └── topology.py         # AgentTopologyRecord, record_topology()/recommend_topology()
 ├── tests/
 │   ├── fixtures/skills/       # sqlite-diagnostics (valid), broken-skill (invalid manifest)
 │   ├── conftest.py         # isolated_env / settings / migrated_settings / db_session
@@ -148,7 +155,10 @@ acrtest/
 │   ├── test_learning_promotion.py
 │   ├── test_learning_skill_generation.py
 │   ├── test_skill_validation.py
-│   └── test_skill_evolution.py
+│   ├── test_skill_evolution.py
+│   ├── test_agents_factory.py
+│   ├── test_agents_planner_critic.py
+│   └── test_agents_topology.py
 └── docs/
     ├── ARCHITECTURE.md     # this file
     └── adr/0001-src-layout-single-package.md
@@ -446,6 +456,51 @@ activates the candidate; `rollback_evolution()` reverses that — the
 baseline is never deleted, so rollback is just reactivating it. Both
 respect safe mode (Phase 7).
 
+## Agents (Phase 10)
+
+`acr.agents.models.AgentSpec` carries the master §749-763 field set (role,
+objective, granted skills/tools, token budget, parent/lineage). It is a
+plan, not a running process — ACR has no actual subprocess/thread agent
+runtime, so "spawning" an agent means executing its objective through the
+existing Phase 1 `run_task()` under that plan's constraints, not starting a
+new concurrent worker.
+
+`acr.agents.factory.estimate_spawn()` implements master §764-773's
+spawn-worth gate *before* any work happens: a deterministic
+`SpawnEstimate` (expected quality gain, coordination overhead, security
+risk) exposes a `worth_spawning` property, and `spawn_agent()` refuses to
+run an objective whose estimate says no unless the caller passes
+`force=True` — spawning sub-agents has a real cost (context, tokens,
+coordination) that master principle #14 says must be justified, not
+assumed. `spawn_agent()` itself is a thin, honest wrapper: it calls the
+real `run_task()` (Phase 1) with the spec's provider and objective; no
+parallel "fake execution" path exists.
+
+`acr.agents.planner.plan_agent()` builds an `AgentSpec` using the *real*
+Phase 4/6 machinery — `skills.routing.route()` for skill grants and
+`tools.exposure.expose_tools()` for tool grants — rather than a new,
+parallel selection heuristic. An objective with no matching active skill
+or relevant tool legitimately gets an empty `skills`/`tools` list; nothing
+is force-populated to make the demo look richer than the registry
+actually supports.
+
+`acr.agents.critic.review_agent_task()` reuses Phase 5's
+`evaluate_with_panel()` rather than inventing a second evaluation
+mechanism for agent output — "review" and "evaluate" are the same
+operation applied to a `Task`'s result. A `FAILED` task fails review by
+construction; a `COMPLETED` task is scored by the same checklist/exact-match
+evaluators every other evaluated task uses.
+
+`acr.agents.topology.AgentTopologyRecord` persists one row per completed
+spawn (task class, worker count, model names, skill ids, quality score,
+success). `recommend_topology()` implements master §774-793's "let evidence
+pick the topology": it refuses to recommend anything until a `task_class`
+has at least `min_samples` (default 3) recorded runs meeting
+`min_success_rate` (default 0.6) — an opinion formed from one or two runs
+would be exactly the unevidenced claim master principle #22 forbids.
+Recommendations are per-`task_class`: evidence from `coding` runs never
+informs a `research` recommendation.
+
 ## Commands available today
 
 ```bash
@@ -478,6 +533,9 @@ uv run acr skills evolve <id> [--description "..."]
 uv run acr skills compare-evolution <baseline-id> <candidate-id>
 uv run acr skills promote-evolution <baseline-id> <candidate-id>
 uv run acr skills rollback-evolution <active-id> <restore-id>
+uv run acr agents plan "objective" [--task-class X]        # AgentSpec via real routing + exposure
+uv run acr agents spawn "objective" [--force]               # estimate -> run_task() -> critic review
+uv run acr agents topology <task-class>                     # evidence-gated worker-count recommendation
 uv run alembic upgrade head
 uv run pytest
 uv run ruff check .
@@ -491,5 +549,7 @@ plus `acr.learning.distillation` as a real caller) — no
 
 ## Next milestone
 
-Phase 10 — Agents: agent specification, factory, planner, critic, topology
-history (master §747-793).
+Phase 11 — Dashboard: operational UI showing active tasks, agent activity,
+token usage, model routing, memory activity, skills, tool execution, costs,
+failures, benchmarks, security events, learning events, and system health;
+must remain useful without advanced graphics (master §1225-1240).

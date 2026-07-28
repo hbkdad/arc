@@ -13,6 +13,11 @@ from pathlib import Path
 import typer
 
 from acr import __version__
+from acr.agents.critic import review_agent_task
+from acr.agents.factory import estimate_spawn, spawn_agent
+from acr.agents.models import AgentSpec, SpawnEstimate
+from acr.agents.planner import plan_agent
+from acr.agents.topology import TopologyRecommendation, recommend_topology
 from acr.benchmarks import memory_recall
 from acr.benchmarks.models import BenchmarkRun
 from acr.benchmarks.runner import run_suite
@@ -76,6 +81,7 @@ models_app = typer.Typer(name="models", help="Model routing.")
 tools_app = typer.Typer(name="tools", help="Tool registry operations.")
 security_app = typer.Typer(name="security", help="Security: audit log, injection scanning.")
 learn_app = typer.Typer(name="learn", help="Experience distillation, promotion, skill generation.")
+agents_app = typer.Typer(name="agents", help="Agent planning, spawning, review, topology history.")
 app.add_typer(context_app)
 app.add_typer(skills_app)
 app.add_typer(benchmark_app)
@@ -84,6 +90,7 @@ app.add_typer(learn_app)
 app.add_typer(models_app)
 app.add_typer(tools_app)
 app.add_typer(security_app)
+app.add_typer(agents_app)
 
 # Every registered benchmark suite: name -> (seed, build_cases). Only one
 # exists today (master principle #23: no feature expansion without
@@ -737,6 +744,90 @@ def skills_rollback_evolution(
         raise typer.Exit(code=1) from exc
 
     typer.echo(f"restored {restored.id} -> {restored.status.value}")
+
+
+@agents_app.command("plan")
+def agents_plan(
+    objective: str = typer.Argument(..., help="Objective to plan an agent for."),
+    role: str = typer.Option("worker", "--role"),
+    token_budget: int = typer.Option(4000, "--token-budget"),
+) -> None:
+    """Build an AgentSpec for an objective, scoped by real skill/tool routing."""
+    settings = get_settings()
+
+    async def _plan() -> AgentSpec:
+        async with session_scope(settings) as session:
+            return await plan_agent(session, objective, role=role, token_budget=token_budget)
+
+    spec = asyncio.run(_plan())
+    estimate = estimate_spawn(spec)
+    typer.echo(f"{spec.id}\trole={spec.role}\ttoken_budget={spec.token_budget}")
+    typer.echo(f"skills={spec.skills or '-'}")
+    typer.echo(f"tools={spec.tools or '-'}")
+    typer.echo(
+        f"estimate: quality_gain={estimate.expected_quality_gain:.2f} "
+        f"overhead={estimate.coordination_overhead:.2f} "
+        f"security_risk={estimate.security_risk:.2f} "
+        f"worth_spawning={estimate.worth_spawning}"
+    )
+
+
+@agents_app.command("spawn")
+def agents_spawn(
+    objective: str = typer.Argument(..., help="Objective to plan and spawn an agent for."),
+    role: str = typer.Option("worker", "--role"),
+    force: bool = typer.Option(
+        False, "--force", help="Spawn even if the spawn estimate recommends against it."
+    ),
+) -> None:
+    """Plan an agent, then run it end to end via the task engine and review the result."""
+    settings = get_settings()
+
+    async def _spawn() -> tuple[AgentSpec, SpawnEstimate, Task | None]:
+        async with session_scope(settings) as session:
+            spec = await plan_agent(session, objective, role=role)
+            estimate = estimate_spawn(spec)
+            if not estimate.worth_spawning and not force:
+                return spec, estimate, None
+            task = await spawn_agent(session, spec, MockProvider(), TelemetryRecorder())
+            await session.commit()
+            return spec, estimate, task
+
+    spec, estimate, task = asyncio.run(_spawn())
+    if task is None:
+        typer.echo(
+            f"not spawned: estimate does not justify it "
+            f"(quality_gain={estimate.expected_quality_gain:.2f}, "
+            f"overhead+risk={estimate.coordination_overhead + estimate.security_risk:.2f}); "
+            f"use --force to spawn anyway"
+        )
+        raise typer.Exit(code=1)
+
+    review = review_agent_task(task)
+    typer.echo(f"{spec.id}: task {task.id} -> {task.status.value}")
+    typer.echo(f"review: passed={review.passed} agreement={review.agreement:.2f}")
+
+
+@agents_app.command("topology")
+def agents_topology(
+    task_class: str = typer.Argument(..., help="Task class to look up topology history for."),
+    min_samples: int = typer.Option(3, "--min-samples"),
+) -> None:
+    """Recommend a worker count for a task class, if there's enough evidence."""
+    settings = get_settings()
+
+    async def _recommend() -> TopologyRecommendation | None:
+        async with session_scope(settings) as session:
+            return await recommend_topology(session, task_class, min_samples=min_samples)
+
+    recommendation = asyncio.run(_recommend())
+    if recommendation is None:
+        typer.echo(f"no recommendation for {task_class!r}: insufficient evidence")
+        return
+    typer.echo(
+        f"{task_class}: {recommendation.recommended_worker_count} worker(s) recommended "
+        f"({recommendation.detail})"
+    )
 
 
 if __name__ == "__main__":

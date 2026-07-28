@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 # Imported for side effects only: registers each domain's ORM tables on
 # Base.metadata before any fixture calls Base.metadata.create_all().
+from acr.agents import topology as _agent_topology_models  # noqa: F401
 from acr.benchmarks import models as _benchmark_models  # noqa: F401
 from acr.config import Settings, get_settings
 from acr.core.tasks import models as _task_models  # noqa: F401

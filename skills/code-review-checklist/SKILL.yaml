@@ -12,7 +12,7 @@ dependencies: []
 permissions: []
 tools: []
 models: []
-token_estimate: 300
+token_estimate: 448
 applicability: Use when asked to review a code change, diff, or pull request before it's merged or shipped.
 contraindications: Do not use for reviewing generated documentation/prose with no executable behavior, or for a change too large to review as a whole (split it first).
 verification: Every finding must include a concrete failure scenario (specific input/state that produces a wrong output or crash) -- a stylistic preference with no failure scenario is not a finding, it's an opinion.

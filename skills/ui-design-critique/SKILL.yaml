@@ -15,7 +15,7 @@ permissions:
 tools:
   - browser_fetch
 models: []
-token_estimate: 300
+token_estimate: 416
 applicability: Use when asked to review, critique, or give feedback on a UI, screen, or design -- whether a live page, a mockup description, or a set of templates.
 contraindications: Do not use for pure backend/API design review with no visual surface, or when the request is just "build this" with no evaluative feedback wanted.
 verification: Each finding must name a specific element and a specific principle it violates or satisfies, with a concrete recommendation -- never an unexplained "this feels off."

@@ -13,7 +13,7 @@ dependencies: []
 permissions: []
 tools: []
 models: []
-token_estimate: 250
+token_estimate: 469
 applicability: Use for any task that touches a codebase, document set, or memory store too large to read in full -- especially before deciding what to load into context.
 contraindications: Do not use for a task whose entire relevant context is already small enough to read in full; the overhead of scoping isn't worth it below a few files.
 verification: The final answer must be traceable to specific retrieved files/records, not to material that was skimmed but never actually used.

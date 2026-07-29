@@ -15,7 +15,7 @@ permissions:
 tools:
   - browser_fetch
 models: []
-token_estimate: 350
+token_estimate: 612
 applicability: Use when a task asks to review, audit, or improve a web dashboard's or admin UI's design.
 contraindications: Do not use for backend/API-only review tasks with no rendered UI, or for a single isolated component with no surrounding design system to check consistency against.
 verification: Every finding must cite the specific file/selector, computed style value, or CSS rule (or its absence) that proves it -- never a subjective "looks off" claim with no evidence.

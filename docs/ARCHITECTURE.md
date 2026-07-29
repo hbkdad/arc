@@ -528,6 +528,32 @@ activates the candidate; `rollback_evolution()` reverses that — the
 baseline is never deleted, so rollback is just reactivating it. Both
 respect safe mode (Phase 7).
 
+### A real evolution run (2026-07-29)
+
+`acr skills evolve ui-design-critique` produced `ui-design-critique@v2`, an
+instructions.md enriched with concrete numeric thresholds (WCAG contrast,
+touch-target sizing, animation timing, spacing rhythm) distilled from
+`nextlevelbuilder/ui-ux-pro-max-skill`'s priority table (MIT-licensed,
+rewritten for ACR's format rather than copied — see that skill's
+`description` field for provenance). `estimate_tokens()` put the richer
+instructions at 581 tokens against baseline's measured 416.
+`compare_versions()` correctly returned `recommend_promote=False,
+"candidate costs more tokens than baseline"` — both versions have `0.0`
+reliability (neither has been through a real task yet), so the only
+measurable dimension is cost, and the candidate is genuinely more
+expensive. `acr improve propose-skill-evolution` accordingly refused to
+create a proposal at all ("candidate does not improve on the baseline").
+
+This is the system working as designed, not a failed experiment: master
+§738-744's whole point is that a richer skill isn't automatically a better
+one, and "more content" is exactly the kind of change that should earn
+promotion through evidence (real task outcomes moving `reliability`) rather
+than being rubber-stamped for looking more thorough. `ui-design-critique@v2`
+stays registered as `experimental` in `<data_dir>/generated_skills/`
+(gitignored — evolution candidates are a runtime artifact, not first-party
+source, same distinction as `skills/` vs. `data/`) and can be re-compared
+once it has real usage data.
+
 ## Agents (Phase 10)
 
 `acr.agents.models.AgentSpec` carries the master §749-763 field set (role,

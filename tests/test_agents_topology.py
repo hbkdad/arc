@@ -59,7 +59,9 @@ async def test_recommend_topology_recommends_with_enough_evidence(
     assert recommendation is not None
     assert recommendation.sample_count == 3
     assert recommendation.success_rate == 1.0
-    assert recommendation.recommended_worker_count in (1, 2)
+    # worker counts (1, 1, 2) -> round(4 / 3) == 1, deterministically -- not
+    # a range guess.
+    assert recommendation.recommended_worker_count == 1
     assert recommendation.mean_quality_score > 0
 
 

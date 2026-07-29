@@ -29,10 +29,22 @@ from acr.tools.models import SideEffectLevel, ToolSpec
 _ALLOWED_SCHEMES = frozenset({"http", "https"})
 _SKIP_TAGS = frozenset({"script", "style", "head"})
 _WHITESPACE = re.compile(r"\s+")
+# A page's full response is buffered before max_chars truncation ever
+# applies (truncation happens on extracted *text*, after parsing). Without
+# a cap, `client.get()` fully downloads whatever a server sends -- a
+# malicious or just very large page can grow the buffer indefinitely, and
+# httpx's per-operation timeout doesn't bound total transfer size, only
+# per-chunk stalls. 10 MB is generous for real HTML/text content while
+# bounding the worst case.
+_MAX_RESPONSE_BYTES = 10 * 1024 * 1024
 
 
 class InvalidUrlError(ValueError):
     """Raised for a URL scheme other than http(s) — no file://, data://, etc."""
+
+
+class ResponseTooLargeError(ValueError):
+    """Raised when a fetched response exceeds `_MAX_RESPONSE_BYTES`."""
 
 
 class UnsafeUrlError(ValueError):
@@ -112,20 +124,30 @@ def extract_text(html: str) -> str:
 async def _web_fetch_handler(
     session: AsyncSession, url: str, max_chars: int = 4000
 ) -> dict[str, Any]:
-    async with httpx.AsyncClient(
-        follow_redirects=True,
-        timeout=10.0,
-        event_hooks={"request": [_validate_request_is_safe]},
-    ) as client:
-        response = await client.get(url)
+    async with (
+        httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=10.0,
+            event_hooks={"request": [_validate_request_is_safe]},
+        ) as client,
+        client.stream("GET", url) as response,
+    ):
         response.raise_for_status()
+        body = bytearray()
+        async for chunk in response.aiter_bytes():
+            body += chunk
+            if len(body) > _MAX_RESPONSE_BYTES:
+                raise ResponseTooLargeError(f"response exceeded {_MAX_RESPONSE_BYTES} bytes: {url}")
+        html = body.decode(response.encoding or "utf-8", errors="replace")
+        response_url = str(response.url)
+        status_code = response.status_code
 
-    full_text = extract_text(response.text)
+    full_text = extract_text(html)
     text = full_text[:max_chars]
     scan = scan_for_injection(text)
     return {
-        "url": str(response.url),
-        "status_code": response.status_code,
+        "url": response_url,
+        "status_code": status_code,
         "text": text,
         "truncated": len(full_text) > max_chars,
         "suspicious": scan.suspicious,

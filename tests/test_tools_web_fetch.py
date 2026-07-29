@@ -8,7 +8,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from acr.tools.web_fetch import InvalidUrlError, UnsafeUrlError, _assert_safe_host, extract_text
+from acr.tools import web_fetch as web_fetch_module
+from acr.tools.web_fetch import (
+    InvalidUrlError,
+    ResponseTooLargeError,
+    UnsafeUrlError,
+    _assert_safe_host,
+    extract_text,
+)
 from acr.tools.web_fetch import _web_fetch_handler as web_fetch
 
 _PAGE = b"""
@@ -25,6 +32,12 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_response(302)
             self.send_header("Location", "http://169.254.169.254/latest/meta-data/")
             self.end_headers()
+            return
+        if self.path == "/large":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(b"x" * 20_000)
             return
         body = _INJECTION_PAGE if self.path == "/injection" else _PAGE
         self.send_response(404 if self.path == "/missing" else 200)
@@ -122,6 +135,18 @@ async def test_assert_safe_host_allows_loopback_and_private_ranges() -> None:
 async def test_assert_safe_host_raises_for_an_unresolvable_host() -> None:
     with pytest.raises(UnsafeUrlError, match="cannot resolve"):
         await _assert_safe_host("this-host-does-not-exist.invalid")
+
+
+async def test_web_fetch_refuses_a_response_over_the_size_cap(
+    local_server: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Lower the cap rather than serving a real 10MB body -- proves the
+    # streaming read actually stops and raises instead of buffering the
+    # whole response first, without a slow/wasteful test.
+    monkeypatch.setattr(web_fetch_module, "_MAX_RESPONSE_BYTES", 100)
+
+    with pytest.raises(ResponseTooLargeError, match="exceeded 100 bytes"):
+        await web_fetch(session=None, url=local_server + "/large")  # type: ignore[arg-type]
 
 
 async def test_web_fetch_allows_loopback_addresses(local_server: str) -> None:

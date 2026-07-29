@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 
 import pytest
 
+from acr.tools import browser as browser_module
 from acr.tools.browser import BrowserNotInstalledError, _browser_fetch_handler
 from acr.tools.web_fetch import InvalidUrlError, UnsafeUrlError
 
@@ -37,6 +38,24 @@ async def test_browser_fetch_truncates_to_max_chars(local_html_server: str) -> N
 
     assert len(result["text"]) == 3
     assert result["truncated"] is True
+
+
+async def test_browser_fetch_caps_extraction_before_max_chars_slicing(
+    local_html_server: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Lower the in-page extraction cap far below the fixture page's real
+    # body text ("Hello\nlocal test page") to prove the JS-side
+    # `.slice()` actually bounds what crosses the CDP protocol, rather
+    # than pulling the full body across and truncating in Python
+    # afterward.
+    # max_chars stays at its default (4000); the fixture page's real body
+    # ("Hello\nlocal test page") is well under that, so if the cap weren't
+    # actually applied in-page, this would return the full body untouched.
+    monkeypatch.setattr(browser_module, "_EXTRACT_CHAR_CAP", 5)
+
+    result = await _fetch_or_skip(local_html_server + "/")
+
+    assert result["text"] == "Hello"
 
 
 async def test_browser_fetch_raises_for_a_non_http_scheme() -> None:

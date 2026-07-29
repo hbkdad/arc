@@ -35,6 +35,7 @@ acrtest/
 ├── SECURITY.md            # GitHub private vulnerability reporting
 ├── CONTRIBUTING.md
 ├── .mcp.json               # registers `acr mcp serve` as a Claude Code project MCP server
+├── .codex/config.toml      # same, for Codex CLI (loaded only for trusted projects)
 ├── .github/workflows/ci.yml       # ruff + pyright + migrations + pytest, every push/PR
 ├── .github/workflows/publish.yml  # PyPI Trusted Publishing, on GitHub Release
 ├── pyproject.toml         # uv project: deps, ruff, pyright, pytest config

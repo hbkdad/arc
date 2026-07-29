@@ -25,6 +25,15 @@ from acr.tools.models import SideEffectLevel, ToolSpec
 from acr.tools.web_fetch import _ALLOWED_SCHEMES, InvalidUrlError, UnsafeUrlError, _assert_safe_host
 
 _NAVIGATION_TIMEOUT_MS = 15_000
+# Cap how much text crosses the CDP protocol into Python memory in the
+# first place, rather than pulling a page's *entire* rendered body text
+# across and only truncating afterward -- a very large rendered page (or
+# one an attacker deliberately bloats) would otherwise have no bound on
+# transfer/memory cost before max_chars (default 4000, far smaller) ever
+# applies. 200k chars is generous for any real page while bounding the
+# worst case; doing the slice in-page (JS) means the oversized text is
+# never actually pulled across in full.
+_EXTRACT_CHAR_CAP = 200_000
 
 
 class BrowserNotInstalledError(RuntimeError):
@@ -72,7 +81,9 @@ async def _browser_fetch_handler(
                 await page.route("**/*", _block_unsafe_requests)
                 response = await page.goto(url, timeout=_NAVIGATION_TIMEOUT_MS)
                 title = await page.title()
-                full_text = await page.inner_text("body")
+                full_text = await page.evaluate(
+                    f"document.body ? document.body.innerText.slice(0, {_EXTRACT_CHAR_CAP}) : ''"
+                )
                 status_code = response.status if response is not None else 0
             finally:
                 await browser.close()

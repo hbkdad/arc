@@ -37,6 +37,16 @@ class Settings(BaseSettings):
     # reports" (see acr.providers.ollama.OllamaProvider); set this to pin one.
     ollama_model: str | None = None
 
+    # `acr run`/MCP `run_task` default to the zero-config mock provider
+    # (tier 0) unless a caller explicitly raises --min-quality-tier. That
+    # stays the safe *out-of-box* default -- a fresh install shouldn't
+    # silently depend on a local daemon being up or start making paid API
+    # calls. This setting is the persistent opt-in: set it once
+    # (ACR_DEFAULT_MIN_QUALITY_TIER=1) and every `acr run`/MCP `run_task`
+    # call that doesn't explicitly override the tier uses it from then on,
+    # without needing --min-quality-tier on every invocation.
+    default_min_quality_tier: int = 0
+
     # master §1534-1550: disables skill activation, destructive/reversible-
     # write tool invocation, and other mutating operations. Off by default.
     safe_mode: bool = False

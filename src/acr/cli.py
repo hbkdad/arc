@@ -172,28 +172,35 @@ def doctor() -> None:
 @app.command()
 def run(
     objective: str = typer.Argument(..., help="Objective for the task engine to execute."),
-    min_quality_tier: int = typer.Option(
-        0,
+    min_quality_tier: int | None = typer.Option(
+        None,
         "--min-quality-tier",
-        help="0=mock only (default, zero-config, no cost). Raise to prefer a "
-        "configured Ollama/cloud provider via the routing ladder (Phase 6).",
+        help="0=mock only, no cost. Raise to prefer a configured Ollama/cloud "
+        "provider via the routing ladder (Phase 6). Defaults to "
+        "Settings.default_min_quality_tier (ACR_DEFAULT_MIN_QUALITY_TIER, "
+        "itself 0 unless set) when omitted.",
     ),
 ) -> None:
     """Create and execute a task end to end (task engine + provider + telemetry).
 
     Provider selection goes through the same routing ladder as
     `acr models route`: cheapest-qualified-and-available wins. At the
-    default `--min-quality-tier 0`, that's always the zero-config mock
-    provider (tier 0, always available) -- identical behavior to before
-    this option existed, so existing scripts/automation aren't affected.
-    Raising the tier opts into real Ollama/cloud usage if configured.
+    out-of-box default (tier 0), that's always the zero-config mock
+    provider (always available) -- identical behavior to before
+    --min-quality-tier existed, so existing scripts/automation aren't
+    affected. Raising the tier -- per-call via this flag, or persistently
+    via ACR_DEFAULT_MIN_QUALITY_TIER -- opts into real Ollama/cloud usage
+    if configured.
     """
     logger = get_logger("acr.cli.run")
     settings = get_settings()
     router = build_default_router(settings)
+    resolved_tier = (
+        min_quality_tier if min_quality_tier is not None else (settings.default_min_quality_tier)
+    )
 
     async def _run() -> Task:
-        profile = await router.select(min_quality_tier=min_quality_tier)
+        profile = await router.select(min_quality_tier=resolved_tier)
         async with session_scope(settings) as session:
             return await run_task(session, objective, profile.provider, TelemetryRecorder())
 

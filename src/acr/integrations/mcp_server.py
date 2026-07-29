@@ -150,12 +150,16 @@ def create_mcp_server(settings: Settings | None = None) -> MCPServer:
     @server.tool(
         description=(
             "Run an objective through ACR's task engine. Uses the zero-config mock "
-            "provider by default (min_quality_tier=0); raise the tier to prefer a "
+            "provider unless min_quality_tier is raised (or "
+            "Settings.default_min_quality_tier is configured) to prefer a "
             "configured Ollama/cloud provider instead."
         )
     )
-    async def run_task(objective: str, min_quality_tier: int = 0) -> dict[str, Any]:
-        profile = await router.select(min_quality_tier=min_quality_tier)
+    async def run_task(objective: str, min_quality_tier: int | None = None) -> dict[str, Any]:
+        resolved_tier = (
+            min_quality_tier if min_quality_tier is not None else settings.default_min_quality_tier
+        )
+        profile = await router.select(min_quality_tier=resolved_tier)
         async with _session() as session:
             task: Task = await run_task_engine(
                 session, objective, profile.provider, TelemetryRecorder()

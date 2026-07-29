@@ -95,6 +95,22 @@ async def test_run_task_tool_reports_no_provider_available(migrated_settings: Se
         )
 
 
+async def test_run_task_tool_honors_settings_default_min_quality_tier(
+    migrated_settings: Settings,
+) -> None:
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    # Settings.default_min_quality_tier is the persistent opt-in: with no
+    # provider satisfying tier 5, an MCP caller that omits min_quality_tier
+    # entirely must still fail the same way an explicit tier=5 would --
+    # proving the settings value reaches router.select(), not just the
+    # tool's own hardcoded None-means-mock fallback.
+    settings = migrated_settings.model_copy(update={"default_min_quality_tier": 5})
+    server = create_mcp_server(settings)
+    with pytest.raises(ToolError, match="min_quality_tier"):
+        await server.call_tool("run_task", {"objective": "say hello via mcp"})
+
+
 async def test_web_fetch_tool_fetches_real_content(
     migrated_settings: Settings, local_html_server: str
 ) -> None:

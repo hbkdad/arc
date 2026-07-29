@@ -79,6 +79,60 @@ def test_run_command_reports_no_provider_available_cleanly(migrated_settings: Se
     assert "no provider available" in result.stdout
 
 
+def test_run_command_omitted_tier_falls_back_to_settings_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # ACR_DEFAULT_MIN_QUALITY_TIER is the persistent opt-in: with no
+    # provider satisfying tier 5, omitting --min-quality-tier entirely must
+    # still fail the same way an explicit `--min-quality-tier 5` would --
+    # proving Settings.default_min_quality_tier actually reaches router.select(),
+    # not just the CLI's own hardcoded 0. Must be set before `get_settings()`
+    # first constructs the cached Settings singleton, so this can't reuse the
+    # `settings`/`migrated_settings` fixtures (they call get_settings() first).
+    monkeypatch.setenv("ACR_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ACR_LOG_FORMAT", "console")
+    monkeypatch.setenv("ACR_DEFAULT_MIN_QUALITY_TIER", "5")
+    from acr.config import get_settings
+
+    get_settings.cache_clear()
+
+    result = runner.invoke(app, ["run", "hello there"])
+
+    assert result.exit_code == 1
+    assert "no provider available" in result.stdout
+
+    get_settings.cache_clear()
+
+
+def test_run_command_explicit_tier_overrides_settings_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("ACR_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ACR_LOG_FORMAT", "console")
+    monkeypatch.setenv("ACR_DEFAULT_MIN_QUALITY_TIER", "5")
+    from acr.config import get_settings
+    from acr.db.base import Base, make_engine
+
+    get_settings.cache_clear()
+
+    import asyncio
+
+    async def _create_schema() -> None:
+        engine = make_engine(get_settings())
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        await engine.dispose()
+
+    asyncio.run(_create_schema())
+
+    result = runner.invoke(app, ["run", "hello there", "--min-quality-tier", "0"])
+
+    assert result.exit_code == 0
+    assert "completed" in result.stdout
+
+    get_settings.cache_clear()
+
+
 _FIXTURE_SKILL = Path(__file__).parent / "fixtures" / "skills" / "sqlite-diagnostics"
 
 

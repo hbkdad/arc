@@ -13,6 +13,7 @@ from acr.config import Settings
 from acr.integrations.mcp_server import create_mcp_server
 from acr.memory import MemoryCandidate, MemoryScope, MemoryType
 from acr.memory.write_controller import remember
+from acr.security.audit import recent_audit_events
 from acr.skills.models import SkillStatus
 from acr.skills.registry import register, set_status
 
@@ -93,6 +94,58 @@ async def test_run_task_tool_reports_no_provider_available(migrated_settings: Se
         await server.call_tool(
             "run_task", {"objective": "say hello via mcp", "min_quality_tier": 5}
         )
+
+
+async def test_run_task_tool_denies_a_credentialed_provider(migrated_settings: Settings) -> None:
+    # An MCP client is a more untrusted caller than the local CLI (see the
+    # module docstring) -- it must not be able to force a real, billed
+    # cloud completion just by passing min_quality_tier=2 itself. Ollama is
+    # tier 1, so it's excluded from tier-2 candidates regardless of whether
+    # a real daemon happens to be reachable on the machine running this
+    # test -- only the credentialed cloud providers qualify, keeping this
+    # deterministic.
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    settings = migrated_settings.model_copy(update={"openai_api_key": "sk-fake"})
+    server = create_mcp_server(settings)
+
+    with pytest.raises(ToolError, match=r"credential\.use"):
+        await server.call_tool(
+            "run_task", {"objective": "say hello via mcp", "min_quality_tier": 2}
+        )
+
+
+async def test_run_task_tool_denial_is_audited(
+    migrated_settings: Settings, db_session: AsyncSession
+) -> None:
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    settings = migrated_settings.model_copy(update={"openai_api_key": "sk-fake"})
+    server = create_mcp_server(settings)
+
+    with pytest.raises(ToolError):
+        await server.call_tool(
+            "run_task", {"objective": "say hello via mcp", "min_quality_tier": 2}
+        )
+
+    events = await recent_audit_events(db_session)
+    assert any(
+        e.payload.get("action") == "tool.invoke:run_task" and e.payload.get("outcome") == "denied"
+        for e in events
+    )
+
+
+async def test_run_task_tool_success_is_audited(
+    migrated_settings: Settings, db_session: AsyncSession
+) -> None:
+    server = create_mcp_server(migrated_settings)
+    await server.call_tool("run_task", {"objective": "say hello via mcp"})
+
+    events = await recent_audit_events(db_session)
+    assert any(
+        e.payload.get("action") == "tool.invoke:run_task" and e.payload.get("outcome") == "granted"
+        for e in events
+    )
 
 
 async def test_run_task_tool_honors_settings_default_min_quality_tier(

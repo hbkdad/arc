@@ -29,7 +29,8 @@ from acr.core.execution import run_task as run_task_engine
 from acr.core.tasks.models import Task
 from acr.db.base import make_engine, make_session_factory
 from acr.routing.models import build_default_router
-from acr.security.permissions import Capability, PermissionSet
+from acr.security.audit import record_audit_event
+from acr.security.permissions import Capability, PermissionDeniedError, PermissionSet
 from acr.telemetry.recorder import TelemetryRecorder
 from acr.tools.default_tools import build_default_registry
 from acr.tools.invocation import invoke_tool
@@ -161,9 +162,38 @@ def create_mcp_server(settings: Settings | None = None) -> MCPServer:
         )
         profile = await router.select(min_quality_tier=resolved_tier)
         async with _session() as session:
-            task: Task = await run_task_engine(
-                session, objective, profile.provider, TelemetryRecorder()
+            telemetry = TelemetryRecorder()
+            # Every other tool in this server goes through invoke_tool()'s
+            # permission+audit seam (see module docstring); this one bypassed
+            # it entirely -- an MCP client could pass min_quality_tier itself
+            # and force a real, billed cloud completion with zero permission
+            # check and zero audit trail. Gate on the *resolved* provider's
+            # actual cost (not the requested tier, which could drift out of
+            # sync with build_default_router()'s tier assignments) and audit
+            # every call, granted or denied, the same way invoke_tool() does.
+            try:
+                if profile.cost_per_1k_tokens > 0:
+                    _MCP_GRANTS.require(Capability.CREDENTIAL_USE)
+            except PermissionDeniedError as exc:
+                await record_audit_event(
+                    session,
+                    telemetry,
+                    action="tool.invoke:run_task",
+                    outcome="denied",
+                    detail={"reason": str(exc), "provider": profile.name},
+                )
+                await session.commit()
+                raise
+            task: Task = await run_task_engine(session, objective, profile.provider, telemetry)
+            await record_audit_event(
+                session,
+                telemetry,
+                action="tool.invoke:run_task",
+                outcome="granted",
+                detail={"provider": profile.name},
+                task_id=task.id,
             )
+            await session.commit()
             return {"id": task.id, "objective": task.objective, "status": task.status.value}
 
     return server

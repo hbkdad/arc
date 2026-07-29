@@ -95,3 +95,19 @@ def tokenize(text: str) -> list[str]:
 def build_match_query(query: str) -> str:
     """Build a safe, OR-joined FTS5 MATCH query. Empty for an all-stopword input."""
     return " OR ".join(f'"{token}"' for token in tokenize(query))
+
+
+def bm25_to_relevance(rank: float) -> float:
+    """Map SQLite FTS5's `bm25()` output to a bounded (0, 1) relevance score.
+
+    `bm25()` is <=0 with *more negative meaning a better match*, and its
+    magnitude grows with corpus size and term frequency — unlike a distance
+    metric starting at 0, there's no fixed scale to invert with `1/(1+rank)`.
+    (`1/(1+rank)` was tried here first and silently went negative once a
+    match's `rank` passed -1, which happens routinely once a table holds a
+    few hundred rows — worth remembering if this function's shape ever looks
+    like it needs "simplifying" back to that.) Flipping the sign first keeps
+    this monotonic and bounded regardless of corpus size.
+    """
+    strength = -rank
+    return max(0.0, strength / (1.0 + strength))

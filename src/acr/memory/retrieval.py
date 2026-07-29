@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from acr.core.fts_query import build_match_query
+from acr.core.fts_query import bm25_to_relevance, build_match_query
 from acr.core.tokens import estimate_tokens
 from acr.memory.models import MemoryRecord, MemoryScope, MemoryStatus, MemoryType, utcnow
 
@@ -95,7 +95,7 @@ async def retrieve(
         if not record.is_current:
             continue
 
-        keyword_score = 1.0 / (1.0 + fts_ranks[record.id]) if record.id in fts_ranks else 0.0
+        keyword_score = bm25_to_relevance(fts_ranks[record.id]) if record.id in fts_ranks else 0.0
         utility = record.successful_uses / record.access_count if record.access_count > 0 else 0.5
         relevance = (
             keyword_score * 0.5 + record.confidence * 0.2 + record.importance * 0.2 + utility * 0.1

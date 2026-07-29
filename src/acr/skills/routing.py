@@ -16,6 +16,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from acr.core.fts_query import bm25_to_relevance
 from acr.skills.models import SkillRecord, SkillStatus
 from acr.skills.registry import list_skills
 from acr.skills.search import search
@@ -39,7 +40,7 @@ def _applicability(
     between the task description and the skill's own description — that's
     why candidacy (below) is never gated on a keyword hit.
     """
-    keyword_score = 1.0 / (1.0 + keyword_rank) if keyword_rank is not None else 0.0
+    keyword_score = bm25_to_relevance(keyword_rank) if keyword_rank is not None else 0.0
     class_score = 1.0 if task_class is not None and task_class in record.task_classes else 0.0
     return max(keyword_score, class_score)
 

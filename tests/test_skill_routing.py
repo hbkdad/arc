@@ -5,7 +5,7 @@ from __future__ import annotations
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from acr.skills.models import SkillRecord, SkillStatus
-from acr.skills.routing import route
+from acr.skills.routing import _applicability, route
 
 
 async def _make_skill(
@@ -111,6 +111,31 @@ async def test_route_respects_max_skills(db_session: AsyncSession) -> None:
     routed = await route(db_session, "Diagnose SQLite database integrity issues", max_skills=2)
 
     assert len(routed) == 2
+
+
+def test_applicability_stays_positive_for_a_strong_bm25_match_with_no_class_match() -> None:
+    # A real SQLite bm25() rank this negative is routine once a table holds
+    # a few hundred rows (bm25 grows more negative, not more positive, with
+    # match strength and corpus size). The old `1.0 / (1.0 + rank)` formula
+    # went negative once rank < -1, which `route()` then clips to 0 via
+    # `if applicability <= 0: continue` -- silently dropping a genuinely
+    # relevant skill from candidacy the longer ACR runs. task_class=None
+    # forces class_score to 0, isolating the keyword-only path.
+    record = SkillRecord(
+        id="strong-match",
+        name="Strong Match",
+        version="1.0.0",
+        description="Diagnose SQLite database integrity issues.",
+        task_classes=[],
+        path="/skills/strong-match",
+        status=SkillStatus.ACTIVE,
+        reliability=0.5,
+        token_estimate=100,
+    )
+
+    applicability = _applicability(record, task_class=None, keyword_rank=-15.7)
+
+    assert applicability > 0
 
 
 async def test_route_task_class_bonus_matches_even_without_keyword_overlap(

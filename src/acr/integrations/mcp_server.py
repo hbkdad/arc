@@ -24,9 +24,10 @@ from typing import Any
 from mcp.server.mcpserver import MCPServer
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from acr.agents.factory import spawn_agent
+from acr.agents.planner import plan_agent
 from acr.config import Settings, get_settings
 from acr.core.execution import run_task as run_task_engine
-from acr.core.tasks.models import Task
 from acr.db.base import make_engine, make_session_factory
 from acr.routing.models import build_default_router
 from acr.security.audit import record_audit_event
@@ -153,10 +154,20 @@ def create_mcp_server(settings: Settings | None = None) -> MCPServer:
             "Run an objective through ACR's task engine. Uses the zero-config mock "
             "provider unless min_quality_tier is raised (or "
             "Settings.default_min_quality_tier is configured) to prefer a "
-            "configured Ollama/cloud provider instead."
+            "configured Ollama/cloud provider instead. Pass task_class to route "
+            "real skills for the objective and feed the outcome back into skill "
+            "reliability and topology evidence (see `acr agents topology`) -- the "
+            "same evidence loop `acr agents spawn` closes, now reachable from any "
+            "MCP client's real usage too, not just CLI-driven dogfooding. Omitting "
+            "task_class runs the plain task engine with no routing/recording, "
+            "identical to this tool's original behavior."
         )
     )
-    async def run_task(objective: str, min_quality_tier: int | None = None) -> dict[str, Any]:
+    async def run_task(
+        objective: str,
+        min_quality_tier: int | None = None,
+        task_class: str | None = None,
+    ) -> dict[str, Any]:
         resolved_tier = (
             min_quality_tier if min_quality_tier is not None else settings.default_min_quality_tier
         )
@@ -184,7 +195,39 @@ def create_mcp_server(settings: Settings | None = None) -> MCPServer:
                 )
                 await session.commit()
                 raise
-            task: Task = await run_task_engine(session, objective, profile.provider, telemetry)
+
+            if task_class is not None:
+                # force=True: an MCP caller explicitly asking to run an
+                # objective isn't opting into agents.factory's separate
+                # cost/risk "worth spawning" gate (acr run doesn't have
+                # one either) -- mirrors run_task_engine's unconditional
+                # execution below, just via the routing-aware path.
+                spec = await plan_agent(session, objective, task_class=task_class)
+                task, review = await spawn_agent(
+                    session, spec, profile.provider, telemetry, task_class=task_class, force=True
+                )
+                await record_audit_event(
+                    session,
+                    telemetry,
+                    action="tool.invoke:run_task",
+                    outcome="granted",
+                    detail={
+                        "provider": profile.name,
+                        "task_class": task_class,
+                        "skills": spec.skills,
+                    },
+                    task_id=task.id,
+                )
+                await session.commit()
+                return {
+                    "id": task.id,
+                    "objective": task.objective,
+                    "status": task.status.value,
+                    "skills_routed": spec.skills,
+                    "review_passed": review.passed,
+                }
+
+            task = await run_task_engine(session, objective, profile.provider, telemetry)
             await record_audit_event(
                 session,
                 telemetry,

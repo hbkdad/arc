@@ -9,6 +9,7 @@ docs/ARCHITECTURE.md's command reference for the full, current list.
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from pathlib import Path
 
 import typer
@@ -18,6 +19,13 @@ from acr.agents.factory import SpawnNotWorthwhileError, estimate_spawn, spawn_ag
 from acr.agents.models import AgentSpec, SpawnEstimate
 from acr.agents.planner import plan_agent
 from acr.agents.topology import TopologyRecommendation, recommend_topology
+from acr.backup import (
+    BackupIntegrityError,
+    RestoreTargetNotEmptyError,
+    UnsafeArchiveMemberError,
+    create_backup,
+    restore_backup,
+)
 from acr.benchmarks import memory_recall
 from acr.benchmarks.models import BenchmarkRun
 from acr.benchmarks.runner import run_suite
@@ -30,6 +38,7 @@ from acr.dashboard.app import create_app as create_dashboard_app
 from acr.db.base import session_scope
 from acr.db.migrate import upgrade_to_head
 from acr.doctor import CheckStatus, run_checks
+from acr.evaluation.calibration import CalibrationReport, compute_calibration
 from acr.evaluation.evaluators import ExactMatchEvaluator
 from acr.evaluation.panel import PanelResult
 from acr.evaluation.regression import RegressionReport, detect_regression
@@ -40,7 +49,9 @@ from acr.evaluation.waste_analyzer import (
     find_duplicate_memories,
 )
 from acr.integrations.mcp_server import create_mcp_server
+from acr.learning.consolidation import GCPlan, apply_gc_plan, plan_gc
 from acr.learning.distillation import DistillationResult, TaskNotFoundError, distill_and_remember
+from acr.learning.failure_intelligence import SimilarFailure, find_similar_failures
 from acr.learning.promotion import PromotionReport, promote_candidates
 from acr.learning.proposals import (
     Proposal,
@@ -50,9 +61,12 @@ from acr.learning.proposals import (
     SelfImprovementDisabledError,
     approve_proposal,
     list_proposals,
+    propose_routing_optimization,
     propose_skill_evolution,
     reject_proposal,
 )
+from acr.learning.routing_optimization import model_outcomes_for_task_class
+from acr.learning.self_practice import PracticeRun, run_self_practice
 from acr.learning.skill_generation import (
     RepeatedPattern,
     detect_repeated_successes,
@@ -84,6 +98,8 @@ from acr.skills.registry import SkillNotFoundError, get, list_skills, register, 
 from acr.skills.routing import RoutedSkill, route
 from acr.skills.search import SkillSearchResult, search
 from acr.skills.validation import ValidationReport, run_validation
+from acr.telemetry.explain import TaskExplanation, explain_task
+from acr.telemetry.explain import TaskNotFoundError as TaskExplainNotFoundError
 from acr.telemetry.models import TelemetryEvent
 from acr.telemetry.recorder import TelemetryRecorder
 from acr.tools.browser import BrowserNotInstalledError
@@ -109,6 +125,10 @@ dashboard_app = typer.Typer(name="dashboard", help="Operational dashboard.")
 mcp_app = typer.Typer(name="mcp", help="MCP server exposure.")
 improve_app = typer.Typer(name="improve", help="Controlled self-improvement proposals.")
 db_app = typer.Typer(name="db", help="Database schema management.")
+memory_app = typer.Typer(
+    name="memory", help="Memory lifecycle: consolidation and garbage collection."
+)
+backup_app = typer.Typer(name="backup", help="Backup and restore the local data directory.")
 app.add_typer(context_app)
 app.add_typer(skills_app)
 app.add_typer(benchmark_app)
@@ -122,6 +142,8 @@ app.add_typer(dashboard_app)
 app.add_typer(mcp_app)
 app.add_typer(improve_app)
 app.add_typer(db_app)
+app.add_typer(memory_app)
+app.add_typer(backup_app)
 
 # Every registered benchmark suite: name -> (seed, build_cases). Only one
 # exists today (master principle #23: no feature expansion without
@@ -216,6 +238,38 @@ def run(
 
     if task.status is TaskStatus.FAILED:
         raise typer.Exit(code=1)
+
+
+@app.command()
+def explain(task_id: str = typer.Argument(..., help="Task id to explain.")) -> None:
+    """Replay a task's real telemetry trail: what happened, in order, and
+    what it retained -- never a generated narrative (see docs/ARCHITECTURE.md)."""
+    settings = get_settings()
+
+    async def _explain() -> TaskExplanation:
+        async with session_scope(settings) as session:
+            return await explain_task(session, task_id)
+
+    try:
+        explanation = asyncio.run(_explain())
+    except TaskExplainNotFoundError as exc:
+        typer.echo(f"unknown task: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    task = explanation.task
+    typer.echo(f"{task.id}\t{task.objective!r}\t{task.status.value}")
+    if explanation.provider:
+        typer.echo(f"provider: {explanation.provider}")
+    if explanation.output_tokens is not None:
+        typer.echo(f"output_tokens: {explanation.output_tokens}")
+    if explanation.duration_seconds is not None:
+        typer.echo(f"duration: {explanation.duration_seconds:.3f}s")
+    if not explanation.events:
+        typer.echo("no telemetry events recorded for this task")
+        return
+    typer.echo("timeline:")
+    for event in explanation.events:
+        typer.echo(f"  {event.created_at.isoformat()}  {event.event_type}\t{event.payload}")
 
 
 @context_app.command("compile")
@@ -777,6 +831,82 @@ def learn_generate_skills(
         )
 
 
+@learn_app.command("failures")
+def learn_failures(
+    objective: str = typer.Argument(
+        ..., help="Objective/keywords to find similar past failures for."
+    ),
+    task_class: str | None = typer.Option(None, "--task-class"),
+    limit: int = typer.Option(5, "--limit"),
+) -> None:
+    """Surface similar past FAILURE memories before attempting an objective (master §615-629)."""
+    settings = get_settings()
+
+    async def _find() -> list[SimilarFailure]:
+        async with session_scope(settings) as session:
+            return await find_similar_failures(
+                session, objective=objective, task_class=task_class, limit=limit
+            )
+
+    results = asyncio.run(_find())
+    if not results:
+        typer.echo("no similar past failures recorded")
+        return
+    for f in results:
+        typer.echo(f"[{f.task_class}] {f.symptom} (relevance={f.relevance:.2f})")
+        if f.root_cause:
+            typer.echo(f"  root cause: {f.root_cause}")
+        if f.resolution:
+            typer.echo(f"  resolution: {f.resolution}")
+
+
+@learn_app.command("self-practice")
+def learn_self_practice(
+    limit: int | None = typer.Option(
+        None, "--limit", help="Practice at most this many active skills. Default: all of them."
+    ),
+    min_quality_tier: int | None = typer.Option(
+        None,
+        "--min-quality-tier",
+        help="Same meaning as `acr run`'s -- 0 (default) is always the zero-config mock "
+        "provider, no cost.",
+    ),
+) -> None:
+    """Grow real reliability/topology evidence by running every active
+    skill's own declared applicability as a genuine practice objective
+    (see docs/ARCHITECTURE.md) -- no external users required. Wire this
+    into your own scheduler (cron, Task Scheduler) for repeated practice;
+    ACR does not install one for you."""
+    settings = get_settings()
+    router = build_default_router(settings)
+    resolved_tier = (
+        min_quality_tier if min_quality_tier is not None else settings.default_min_quality_tier
+    )
+
+    async def _practice() -> list[PracticeRun]:
+        profile = await router.select(min_quality_tier=resolved_tier)
+        async with session_scope(settings) as session:
+            runs = await run_self_practice(session, profile.provider, limit=limit)
+            await session.commit()
+            return runs
+
+    try:
+        runs = asyncio.run(_practice())
+    except NoProviderAvailableError as exc:
+        typer.echo(f"no provider available: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    if not runs:
+        typer.echo("no active skills with a declared task_class + applicability to practice")
+        return
+    for run in runs:
+        typer.echo(
+            f"{run.skill_id}\t{run.task_class}\ttask={run.task.id}\t"
+            f"status={run.task.status.value}\tpassed={run.review.passed}"
+        )
+    typer.echo(f"{len(runs)} practice run(s) completed")
+
+
 @skills_app.command("validate")
 def skills_validate(
     skill_id: str = typer.Argument(..., help="Skill id to validate."),
@@ -950,13 +1080,17 @@ def agents_plan(
     """Build an AgentSpec for an objective, scoped by real skill/tool routing."""
     settings = get_settings()
 
-    async def _plan() -> AgentSpec:
+    async def _plan() -> tuple[AgentSpec, list[SimilarFailure]]:
         async with session_scope(settings) as session:
-            return await plan_agent(
+            spec = await plan_agent(
                 session, objective, role=role, token_budget=token_budget, task_class=task_class
             )
+            similar = await find_similar_failures(
+                session, objective=objective, task_class=task_class, limit=3
+            )
+            return spec, similar
 
-    spec = asyncio.run(_plan())
+    spec, similar_failures = asyncio.run(_plan())
     estimate = estimate_spawn(spec)
     typer.echo(f"{spec.id}\trole={spec.role}\ttoken_budget={spec.token_budget}")
     typer.echo(f"skills={spec.skills or '-'}")
@@ -967,6 +1101,10 @@ def agents_plan(
         f"security_risk={estimate.security_risk:.2f} "
         f"worth_spawning={estimate.worth_spawning}"
     )
+    if similar_failures:
+        typer.echo(f"similar past failures: {len(similar_failures)} (see `acr learn failures`)")
+        for f in similar_failures:
+            typer.echo(f"  [{f.task_class}] {f.symptom}")
 
 
 @agents_app.command("spawn")
@@ -987,10 +1125,15 @@ def agents_spawn(
     """Plan an agent, then run it end to end via the task engine and review the result."""
     settings = get_settings()
 
-    async def _spawn() -> tuple[AgentSpec, SpawnEstimate, tuple[Task, PanelResult] | None]:
+    async def _spawn() -> tuple[
+        AgentSpec, SpawnEstimate, list[SimilarFailure], tuple[Task, PanelResult] | None
+    ]:
         async with session_scope(settings) as session:
             spec = await plan_agent(session, objective, role=role, task_class=task_class)
             estimate = estimate_spawn(spec)
+            similar = await find_similar_failures(
+                session, objective=objective, task_class=task_class, limit=3
+            )
             try:
                 result = await spawn_agent(
                     session,
@@ -1001,11 +1144,15 @@ def agents_spawn(
                     force=force,
                 )
             except SpawnNotWorthwhileError:
-                return spec, estimate, None
+                return spec, estimate, similar, None
             await session.commit()
-            return spec, estimate, result
+            return spec, estimate, similar, result
 
-    spec, estimate, result = asyncio.run(_spawn())
+    spec, estimate, similar_failures, result = asyncio.run(_spawn())
+    if similar_failures:
+        typer.echo(f"similar past failures: {len(similar_failures)} (see `acr learn failures`)")
+        for f in similar_failures:
+            typer.echo(f"  [{f.task_class}] {f.symptom}")
     if result is None:
         typer.echo(
             f"not spawned: estimate does not justify it "
@@ -1083,6 +1230,51 @@ def db_upgrade() -> None:
     typer.echo(f"database upgraded to head: {settings.database_path}")
 
 
+@backup_app.command("create")
+def backup_create(
+    output: Path | None = typer.Option(
+        None, "--output", help="Archive path. Defaults to <data_dir>/backups/<timestamp>.zip."
+    ),
+) -> None:
+    """Snapshot the local data directory (database + generated skills) into
+    a single archive with a SHA-256 manifest. Does not include the
+    first-party skills/ package tree -- that's already in git."""
+    settings = get_settings()
+    archive_path = output or (
+        settings.data_dir / "backups" / f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}.zip"
+    )
+    result = create_backup(settings.data_dir, archive_path)
+    typer.echo(f"{result.archive_path}\t{result.file_count} file(s)\t{result.total_bytes} bytes")
+
+
+@backup_app.command("restore")
+def backup_restore(
+    archive: Path = typer.Argument(..., help="Archive created by `acr backup create`."),
+    target_dir: Path = typer.Option(
+        ..., "--target-dir", help="Directory to restore into. Refused if non-empty unless --force."
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Restore into a non-empty target directory anyway."
+    ),
+) -> None:
+    """Verify every file's hash against the archive's own manifest before
+    writing anything, then restore. Never overwrites a populated target
+    directory unless --force is passed."""
+    try:
+        count = restore_backup(archive, target_dir, force=force)
+    except RestoreTargetNotEmptyError as exc:
+        typer.echo(f"target directory is not empty: {exc} (use --force to proceed anyway)")
+        raise typer.Exit(code=1) from exc
+    except BackupIntegrityError as exc:
+        typer.echo(f"integrity check failed, nothing was written: {exc}")
+        raise typer.Exit(code=1) from exc
+    except UnsafeArchiveMemberError as exc:
+        typer.echo(f"refused an unsafe archive member path, nothing was written: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(f"restored {count} file(s) to {target_dir}")
+
+
 def _echo_proposal(p: Proposal) -> None:
     typer.echo(f"{p.id}  [{p.status.value}]  {p.kind.value}  subject={p.subject}")
     typer.echo(f"  {p.reason}")
@@ -1122,6 +1314,60 @@ def improve_propose_skill_evolution(
         typer.echo("no proposal: candidate does not improve on the baseline")
         return
     _echo_proposal(proposal)
+
+
+@improve_app.command("propose-routing-optimization")
+def improve_propose_routing_optimization(
+    task_class: str = typer.Argument(..., help="Task class to compare model outcomes for."),
+    current_model: str = typer.Argument(..., help="The model currently preferred/reachable first."),
+    candidate_model: str = typer.Argument(..., help="The model to compare it against."),
+    min_samples: int = typer.Option(
+        3, "--min-samples", help="Minimum real recorded spawns per model to have an opinion."
+    ),
+) -> None:
+    """Compare real per-model outcomes for a task class (from `acr agents spawn`
+    evidence) and propose switching only if the comparison clearly recommends
+    it. Advisory only -- see docs/ARCHITECTURE.md: there is no safe mechanism
+    to auto-apply a routing change, so this never auto-applies regardless of
+    ACR_AUTO_APPLY_PROPOSALS, and approving it just marks it reviewed."""
+    settings = get_settings()
+
+    async def _propose() -> Proposal | str | None:
+        async with session_scope(settings) as session:
+            outcomes = await model_outcomes_for_task_class(
+                session, task_class=task_class, min_samples=min_samples
+            )
+            by_name = {o.model_name: o for o in outcomes}
+            missing = [m for m in (current_model, candidate_model) if m not in by_name]
+            if missing:
+                return (
+                    f"insufficient evidence for {missing} in task_class={task_class!r} "
+                    f"(need >= {min_samples} real recorded spawns each)"
+                )
+            proposal = await propose_routing_optimization(
+                session,
+                settings,
+                TelemetryRecorder(),
+                task_class=task_class,
+                current=by_name[current_model],
+                candidate=by_name[candidate_model],
+            )
+            await session.commit()
+            return proposal
+
+    try:
+        result = asyncio.run(_propose())
+    except SelfImprovementDisabledError as exc:
+        typer.echo(f"disabled: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    if isinstance(result, str):
+        typer.echo(result)
+        raise typer.Exit(code=1)
+    if result is None:
+        typer.echo(f"no proposal: {candidate_model} does not clearly outperform {current_model}")
+        return
+    _echo_proposal(result)
 
 
 @improve_app.command("list")
@@ -1192,6 +1438,108 @@ def improve_reject(proposal_id: str = typer.Argument(...)) -> None:
         raise typer.Exit(code=1) from exc
 
     _echo_proposal(proposal)
+
+
+def _echo_gc_plan(plan: GCPlan) -> None:
+    for action in plan.actions:
+        typer.echo(
+            f"{action.memory_id}\t{action.type.value}\t"
+            f"{action.current_status.value} -> {action.target_status.value}\t{action.reason}"
+        )
+    typer.echo(f"{len(plan.actions)} eligible / {plan.considered} considered")
+
+
+@memory_app.command("gc-plan")
+def memory_gc_plan(
+    superseded_retention_days: int = typer.Option(30, "--superseded-retention-days"),
+    quarantined_retention_days: int = typer.Option(14, "--quarantined-retention-days"),
+    stale_candidate_days: int = typer.Option(60, "--stale-candidate-days"),
+) -> None:
+    """Dry run: show which memory records `memory gc-apply` would archive."""
+    settings = get_settings()
+
+    async def _plan() -> GCPlan:
+        async with session_scope(settings) as session:
+            return await plan_gc(
+                session,
+                superseded_retention_days=superseded_retention_days,
+                quarantined_retention_days=quarantined_retention_days,
+                stale_candidate_days=stale_candidate_days,
+            )
+
+    plan = asyncio.run(_plan())
+    if not plan.actions:
+        typer.echo(f"no records eligible for archival ({plan.considered} considered)")
+        return
+    _echo_gc_plan(plan)
+    typer.echo("run `acr memory gc-apply` to apply")
+
+
+@memory_app.command("gc-apply")
+def memory_gc_apply(
+    superseded_retention_days: int = typer.Option(30, "--superseded-retention-days"),
+    quarantined_retention_days: int = typer.Option(14, "--quarantined-retention-days"),
+    stale_candidate_days: int = typer.Option(60, "--stale-candidate-days"),
+) -> None:
+    """Recompute the GC plan and apply it -- archives every eligible record.
+    CONFIRMED records are never eligible at any age; see `acr memory gc-plan`
+    to review first."""
+    settings = get_settings()
+
+    async def _apply() -> tuple[GCPlan, int]:
+        async with session_scope(settings) as session:
+            plan = await plan_gc(
+                session,
+                superseded_retention_days=superseded_retention_days,
+                quarantined_retention_days=quarantined_retention_days,
+                stale_candidate_days=stale_candidate_days,
+            )
+            applied = await apply_gc_plan(session, plan)
+            await session.commit()
+            return plan, applied
+
+    plan, applied = asyncio.run(_apply())
+    if not plan.actions:
+        typer.echo(f"no records eligible for archival ({plan.considered} considered)")
+        return
+    _echo_gc_plan(plan)
+    typer.echo(f"archived {applied}/{len(plan.actions)} record(s)")
+
+
+@memory_app.command("calibration")
+def memory_calibration(
+    min_uses: int = typer.Option(
+        1, "--min-uses", help="Minimum real recorded uses (successful+failed) to include a record."
+    ),
+) -> None:
+    """Does stored memory confidence actually predict outcomes? A fixed-bin
+    reliability curve + Brier score over real successful_uses/failed_uses
+    evidence -- a record with no recorded uses has no empirical outcome to
+    compare against and is excluded, not scored as 0%."""
+    settings = get_settings()
+
+    async def _compute() -> CalibrationReport:
+        async with session_scope(settings) as session:
+            return await compute_calibration(session, min_uses=min_uses)
+
+    report = asyncio.run(_compute())
+    if not report.bins:
+        typer.echo(
+            f"no evidenced records to calibrate against "
+            f"({report.records_excluded_no_evidence} excluded, 0 with >= {min_uses} use(s))"
+        )
+        return
+    for b in report.bins:
+        typer.echo(
+            f"[{b.lower:.1f}, {b.upper:.1f})\tn={b.count}\t"
+            f"mean_confidence={b.mean_confidence:.2f}\t"
+            f"empirical_success_rate={b.empirical_success_rate:.2f}"
+        )
+    typer.echo(
+        f"brier_score={report.brier_score:.4f} (0=perfectly calibrated, lower is better)\t"
+        f"{report.records_considered} record(s) considered, "
+        f"{report.records_excluded_no_evidence} excluded (no recorded uses)"
+    )
 
 
 if __name__ == "__main__":

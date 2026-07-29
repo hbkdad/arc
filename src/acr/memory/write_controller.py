@@ -19,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from acr.memory.models import MemoryRecord, MemoryScope, MemoryStatus, MemoryType, utcnow
+from acr.memory.schemas import DecisionPayload, FailurePayload
 
 MIN_CONFIDENCE_TO_STORE = 0.2
 MIN_CONFIDENCE_FOR_CONFIRMED = 0.75
@@ -188,3 +189,60 @@ async def remember(
     evaluation = await evaluate(session, candidate)
     record = await apply(session, candidate, evaluation)
     return evaluation, record
+
+
+async def remember_failure(
+    session: AsyncSession,
+    payload: FailurePayload,
+    *,
+    subject: str,
+    scope: MemoryScope = MemoryScope.PROJECT,
+    source_type: str,
+    confidence: float = 0.7,
+    evidence: str | None = None,
+) -> tuple[WriteEvaluation, MemoryRecord | None]:
+    """`remember()` for a `MemoryType.FAILURE`, writing `payload` into
+    `structured_payload` (see `acr.memory.schemas`) and `payload.symptom`
+    into `content` so keyword/FTS search over `content` still finds it."""
+    return await remember(
+        session,
+        MemoryCandidate(
+            type=MemoryType.FAILURE,
+            scope=scope,
+            subject=subject,
+            content=payload.symptom,
+            source_type=source_type,
+            confidence=confidence,
+            evidence=evidence,
+            structured_payload=payload.to_dict(),
+        ),
+    )
+
+
+async def remember_decision(
+    session: AsyncSession,
+    payload: DecisionPayload,
+    *,
+    subject: str,
+    scope: MemoryScope = MemoryScope.PROJECT,
+    source_type: str,
+    confidence: float = 0.7,
+    evidence: str | None = None,
+) -> tuple[WriteEvaluation, MemoryRecord | None]:
+    """`remember()` for a `MemoryType.DECISION`, writing `payload` into
+    `structured_payload` (see `acr.memory.schemas`) and `payload.rationale`
+    (falling back to `context`) into `content` so keyword/FTS search over
+    `content` still finds it."""
+    return await remember(
+        session,
+        MemoryCandidate(
+            type=MemoryType.DECISION,
+            scope=scope,
+            subject=subject,
+            content=payload.rationale or payload.context,
+            source_type=source_type,
+            confidence=confidence,
+            evidence=evidence,
+            structured_payload=payload.to_dict(),
+        ),
+    )

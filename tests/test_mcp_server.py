@@ -7,8 +7,10 @@ from typing import Any
 
 import pytest
 from mcp.types import CallToolResult
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from acr.agents.topology import AgentTopologyRecord
 from acr.config import Settings
 from acr.integrations.mcp_server import create_mcp_server
 from acr.memory import MemoryCandidate, MemoryScope, MemoryType
@@ -146,6 +148,61 @@ async def test_run_task_tool_success_is_audited(
         e.payload.get("action") == "tool.invoke:run_task" and e.payload.get("outcome") == "granted"
         for e in events
     )
+
+
+async def test_run_task_tool_without_task_class_omits_routing_fields(
+    migrated_settings: Settings,
+) -> None:
+    server = create_mcp_server(migrated_settings)
+    result = await server.call_tool("run_task", {"objective": "say hello via mcp"})
+
+    body = _structured(result)
+    assert "skills_routed" not in body
+    assert "review_passed" not in body
+
+
+async def test_run_task_tool_with_task_class_routes_skills_and_records_evidence(
+    migrated_settings: Settings, db_session: AsyncSession
+) -> None:
+    skill = await register(db_session, FIXTURES / "sqlite-diagnostics")
+    skill = await set_status(db_session, skill.id, SkillStatus.ACTIVE)
+    await db_session.commit()
+
+    server = create_mcp_server(migrated_settings)
+    result = await server.call_tool(
+        "run_task",
+        {
+            "objective": "diagnose a corrupted SQLite database",
+            "task_class": "database-diagnostics",
+        },
+    )
+
+    body = _structured(result)
+    assert body["status"] == "completed"
+    assert skill.id in body["skills_routed"]
+    assert body["review_passed"] is True
+
+    # The MCP tool call above ran through create_mcp_server()'s own
+    # engine/session, a separate connection from this test's db_session --
+    # db_session's identity map still holds the pre-call `skill` object,
+    # so a plain get() would return the stale cached instance rather than
+    # re-querying the row that genuinely changed underneath it.
+    await db_session.refresh(skill)
+    assert skill.successful_uses == 1
+
+    rows = (
+        (
+            await db_session.execute(
+                select(AgentTopologyRecord).where(
+                    AgentTopologyRecord.task_class == "database-diagnostics"
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 1
+    assert rows[0].succeeded is True
 
 
 async def test_run_task_tool_honors_settings_default_min_quality_tier(

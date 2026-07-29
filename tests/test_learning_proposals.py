@@ -9,15 +9,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from acr.config import Settings
 from acr.learning.proposals import (
+    ProposalKind,
     ProposalNotFoundError,
     ProposalNotPendingError,
     ProposalStatus,
     SelfImprovementDisabledError,
     approve_proposal,
     list_proposals,
+    propose_routing_optimization,
     propose_skill_evolution,
     reject_proposal,
 )
+from acr.learning.routing_optimization import ModelOutcome
 from acr.security.audit import recent_audit_events
 from acr.skills.evolution import create_candidate_version
 from acr.skills.models import SkillStatus
@@ -228,6 +231,109 @@ async def test_list_proposals_filters_by_status(
 
     assert [p.id for p in pending] == [proposal.id]
     assert approved == []
+
+
+async def test_propose_routing_optimization_creates_a_pending_proposal_when_recommended(
+    migrated_settings: Settings, db_session: AsyncSession
+) -> None:
+    current = ModelOutcome(model_name="mock", samples=5, success_rate=0.6, mean_quality=0.5)
+    candidate = ModelOutcome(model_name="ollama", samples=5, success_rate=0.9, mean_quality=0.8)
+
+    proposal = await propose_routing_optimization(
+        db_session,
+        migrated_settings,
+        TelemetryRecorder(),
+        task_class="ui-audit",
+        current=current,
+        candidate=candidate,
+    )
+    await db_session.commit()
+
+    assert proposal is not None
+    assert proposal.kind is ProposalKind.ROUTING_OPTIMIZATION
+    assert proposal.status is ProposalStatus.PENDING
+    assert proposal.subject == "ui-audit"
+
+
+async def test_propose_routing_optimization_returns_none_without_clear_improvement(
+    migrated_settings: Settings, db_session: AsyncSession
+) -> None:
+    current = ModelOutcome(model_name="mock", samples=5, success_rate=0.8, mean_quality=0.8)
+    candidate = ModelOutcome(model_name="ollama", samples=5, success_rate=0.8, mean_quality=0.8)
+
+    proposal = await propose_routing_optimization(
+        db_session,
+        migrated_settings,
+        TelemetryRecorder(),
+        task_class="ui-audit",
+        current=current,
+        candidate=candidate,
+    )
+
+    assert proposal is None
+
+
+async def test_propose_routing_optimization_never_auto_applies_even_when_configured(
+    migrated_settings: Settings, db_session: AsyncSession
+) -> None:
+    migrated_settings.auto_apply_proposals = True
+    current = ModelOutcome(model_name="mock", samples=5, success_rate=0.6, mean_quality=0.5)
+    candidate = ModelOutcome(model_name="ollama", samples=5, success_rate=0.9, mean_quality=0.8)
+
+    proposal = await propose_routing_optimization(
+        db_session,
+        migrated_settings,
+        TelemetryRecorder(),
+        task_class="ui-audit",
+        current=current,
+        candidate=candidate,
+    )
+    await db_session.commit()
+
+    # Unlike skill evolution, there is no safe mechanism to auto-apply a
+    # routing change -- this must stay PENDING regardless of the setting.
+    assert proposal is not None
+    assert proposal.status is ProposalStatus.PENDING
+
+
+async def test_approving_a_routing_optimization_proposal_mutates_nothing_but_its_own_status(
+    migrated_settings: Settings, db_session: AsyncSession
+) -> None:
+    current = ModelOutcome(model_name="mock", samples=5, success_rate=0.6, mean_quality=0.5)
+    candidate = ModelOutcome(model_name="ollama", samples=5, success_rate=0.9, mean_quality=0.8)
+    proposal = await propose_routing_optimization(
+        db_session,
+        migrated_settings,
+        TelemetryRecorder(),
+        task_class="ui-audit",
+        current=current,
+        candidate=candidate,
+    )
+    await db_session.commit()
+    assert proposal is not None
+
+    approved = await approve_proposal(db_session, TelemetryRecorder(), proposal.id)
+    await db_session.commit()
+
+    assert approved.status is ProposalStatus.APPROVED
+
+
+async def test_propose_routing_optimization_raises_when_self_improvement_disabled(
+    migrated_settings: Settings, db_session: AsyncSession
+) -> None:
+    migrated_settings.self_improvement_enabled = False
+    current = ModelOutcome(model_name="mock", samples=5, success_rate=0.6, mean_quality=0.5)
+    candidate = ModelOutcome(model_name="ollama", samples=5, success_rate=0.9, mean_quality=0.8)
+
+    with pytest.raises(SelfImprovementDisabledError):
+        await propose_routing_optimization(
+            db_session,
+            migrated_settings,
+            TelemetryRecorder(),
+            task_class="ui-audit",
+            current=current,
+            candidate=candidate,
+        )
 
 
 async def test_propose_and_approve_are_audit_logged(

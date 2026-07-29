@@ -1418,6 +1418,130 @@ build, OIDC exchange, upload, attestation generation — and the package
 went live in under a minute. Verified against the real, live PyPI
 package afterward, not just the workflow's own "success" status.
 
+## Next-level implementations and further-training capabilities (2026-07-29)
+
+A researched, scoped expansion pass — grounded partly in
+`hbkdad/Adaptive-Cognitive-Runtime` (a separate, more mature reference
+implementation of the same master spec, consulted for design ideas only;
+see that repo's own memory note — no code ported, no commits made there)
+and partly in real gaps this session found by reading the actual
+codebase. Nine additions, each real and tested, none requiring a new
+external dependency or touching source/dependencies/permissions (the
+proposals scope boundary, unaffected by this pass):
+
+- **`acr.memory.schemas`** — `FailurePayload`/`DecisionPayload` dataclasses
+  giving `MemoryType.FAILURE`/`DECISION` a real schema in
+  `structured_payload` (a generic JSON column already on `MemoryRecord`)
+  instead of free text, plus `remember_failure()`/`remember_decision()`
+  write-controller helpers. Parsing is best-effort (`parse_*_payload()`
+  returns `None`, never raises, for a pre-schema or free-form record).
+- **`acr.learning.failure_intelligence`** — `find_similar_failures()`
+  queries `MemoryType.FAILURE` records via the existing hybrid
+  `retrieve()` (no new ranking heuristic), filtered to records that
+  actually parse as `FailurePayload`. Wired into `acr agents plan`/`spawn`
+  (printed, not schema-changing — `AgentSpec`'s docstring commits to "the
+  exact field set from master §749-763") and a standalone
+  `acr learn failures <objective>`.
+- **`acr.learning.consolidation`** — `plan_gc()`/`apply_gc_plan()`, the
+  conservative opposite-direction mirror of `promote_candidates()`:
+  retires a stale never-graduated `CANDIDATE`, an old `SUPERSEDED`, or an
+  old-and-unreviewed `QUARANTINED` record to `ARCHIVED`. `CONFIRMED` is
+  never eligible at any age. Two-step by design (`acr memory gc-plan`
+  dry-run, `acr memory gc-apply` re-plans and applies) so nothing is ever
+  archived as a side effect of just computing a plan; `apply_gc_plan()`
+  re-fetches and re-checks each record's status rather than trusting the
+  plan's in-memory snapshot, since a real caller might review a plan
+  before applying it.
+- **`acr.telemetry.explain`** — `explain_task()` replays a task's real
+  `TelemetryEvent` trail in order (provider, tokens, computed duration) —
+  never a generated narrative. `acr explain <task-id>`. Honest about what
+  ACR doesn't retain: `AgentSpec` is an in-memory plan, never persisted,
+  so which skills were routed for a given task isn't reconstructable from
+  this table alone.
+- **`acr.backup`** — `create_backup()`/`restore_backup()`: a zip of
+  `Settings.data_dir` (database + `generated_skills/`, not the git-tracked
+  `skills/` tree) with a `manifest.json` SHA-256 hash per file.
+  `restore_backup()` verifies every hash before writing anything, checks
+  every archive member's resolved path stays inside the target directory
+  (zip-slip), and refuses a non-empty target unless `force=True`. `acr
+  backup create`/`acr backup restore`. Known limitation, documented in the
+  module: copies the SQLite file directly rather than using SQLite's own
+  online-backup API, so a backup taken during concurrent writes could in
+  principle be inconsistent — fine against an idle process, not yet a
+  hot-backup tool.
+- **`acr.learning.routing_optimization`** — `model_outcomes_for_task_class()`
+  computes real per-model success-rate/mean-quality from
+  `AgentTopologyRecord` rows (evidence that only exists because of the
+  fix below), gated at `min_samples` real recorded runs per model, the
+  same discipline `recommend_topology()` already uses.
+  `compare_models()` recommends a switch only when a candidate is
+  strictly better on *both* dimensions (not just non-regressed — a
+  routing change has real cost/risk, unlike a free lateral skill-version
+  move). Wired into `proposals.py` as `ProposalKind.ROUTING_OPTIMIZATION`
+  (`acr improve propose-routing-optimization <task-class> <current>
+  <candidate>`) — **never auto-applies regardless of
+  `auto_apply_proposals`**: the only real lever,
+  `Settings.default_min_quality_tier`, is an environment variable this
+  process must never write to itself, so approving this proposal kind
+  means "reviewed by a human," not "applied."
+- **Closing the evidence loop** (`acr.agents.factory.spawn_agent()`) — the
+  most consequential fix in this pass. `learning.utility.
+  record_skill_outcome()` (Phase 8) and `agents.topology.
+  record_topology()` (Phase 10) both existed as real, tested functions
+  with **nothing in application code ever calling either one** —
+  `routing.route()`'s "check prior performance" and
+  `recommend_topology()`'s evidence requirement could never see real
+  data no matter how many agents actually ran. Fixed at the one choke
+  point every caller shares: `spawn_agent()` now reviews its own task and
+  records both. `task_class` became a required keyword (threaded through
+  `agents_plan`/`agents_spawn`'s new `--task-class`) rather than inferred
+  — no classifier model exists, so guessing would silently misattribute
+  evidence. `spawn_agent()`'s return type changed from `Task` to
+  `tuple[Task, PanelResult]`. Verified with real dogfooding: three `acr
+  agents spawn --task-class ui-audit` runs took `acr agents topology
+  ui-audit` from "insufficient evidence" to a real recommendation (3/3
+  successful, mean quality 1.00), and `dashboard-ui-audit`'s reliability
+  moved from `0.00`/0 uses to `1.00`/3 uses on the dashboard's own
+  `/skills` page — no seeded rows.
+- **MCP `run_task` closes the same loop for external usage**
+  (`acr.integrations.mcp_server`) — the MCP tool wrapped
+  `core.execution.run_task()` directly, bypassing `spawn_agent()`
+  entirely, so real usage from any MCP client (Claude Code, Codex, or
+  anything else) never fed the evidence loop even after the fix above.
+  `run_task` now accepts an optional `task_class`; when given, it routes
+  through `plan_agent()`/`spawn_agent()` (`force=True` — an MCP caller
+  isn't opting into the separate cost/risk "worth spawning" gate any more
+  than `acr run` is) instead of the bare engine, returning
+  `skills_routed`/`review_passed` alongside the existing
+  `id`/`objective`/`status`. Omitting `task_class` is byte-for-byte the
+  original behavior — existing callers see no change.
+- **`acr.learning.self_practice`** — `run_self_practice()` runs every
+  active skill's own author-written `applicability` field (not a
+  fabricated scenario — the one thing already on record describing when
+  the skill should be used) as a real objective for its first declared
+  `task_class`, through the same `spawn_agent()` evidence path. `acr
+  learn self-practice [--limit N]`. "Scheduled" describes the intended
+  use (wire it into cron/Task Scheduler yourself) — this module doesn't
+  install anything into the host's own scheduler, a system-level change
+  outside what a CLI command does as a side effect.
+- **`acr.evaluation.calibration`** — `compute_calibration()`: does stored
+  memory `confidence` actually predict outcomes? A fixed-bin reliability
+  curve plus a Brier score, computed strictly from
+  `successful_uses`/`failed_uses` (the same counters `context.attribution`
+  maintains) — a record with zero recorded uses has no empirical outcome
+  to compare against and is excluded entirely, never scored as 0%. `acr
+  memory calibration`.
+
+One module-organization note worth recording: `self_practice.py` (and
+almost `routing_optimization.py`) hit a real circular import —
+`acr.agents.factory` imports `acr.learning.utility`, so `acr.learning`'s
+own package `__init__.py` can't import anything back from
+`acr.agents.factory` at module level without Python finding a partially-
+initialized module mid-import. Fixed by deferring `self_practice.py`'s
+`agents.factory`/`agents.planner` imports to inside the function body —
+standard for this exact class of cycle, and harmless since both packages
+are fully loaded by the time the function actually runs.
+
 ## What's left
 
 Every phase in the master spec's 15-phase list (§65-66) now has a
@@ -1438,14 +1562,15 @@ deferred gaps, each with a reason rather than an oversight:
   integration" and "Codex CLI integration" above. Both clients gate
   project-scoped config behind the user's own explicit trust/approval,
   so cloning the repo can't silently launch anything either way.
-- **Additional self-improvement proposal kinds** (Phase 15) — "strategy
-  optimization," "routing optimization," and a general "experiments"
-  runner all need their own evidence sources before they could honestly
-  propose anything; none of those evidence sources exist yet. The
-  `Proposal` mechanism itself is generic (see "Controlled
-  self-improvement" above) — a second proposal kind is a matter of
-  writing a new evidence-producing comparison and an `_apply()` branch,
-  not a redesign.
+- ~~Additional self-improvement proposal kinds~~ (Phase 15) — **partially
+  done.** `ROUTING_OPTIMIZATION` shipped 2026-07-29 (see "Next-level
+  implementations" below) — evidence-gated, advisory-only since there's no
+  safe mechanism to auto-apply a routing change. "Strategy optimization"
+  and a general "experiments" runner still need their own evidence
+  sources; the `Proposal` mechanism itself stayed generic enough that
+  adding routing optimization was exactly "a new evidence-producing
+  comparison and an `_apply()` branch," confirming that's the real shape
+  of a third kind too.
 - **Real Ollama/cloud provider usage by default** — reachable (`--min-
   quality-tier`/`min_quality_tier`, `Settings.default_min_quality_tier`
   for a sticky opt-in) and now actually *reliable* when opted into (see

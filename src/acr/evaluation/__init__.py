@@ -1,6 +1,7 @@
 """Evaluation system: evaluators, panels, regression detection, waste
 analysis (master §1041-1090, §1026-1039)."""
 
+from acr.evaluation.calibration import CalibrationBin, CalibrationReport, compute_calibration
 from acr.evaluation.evaluators import (
     ChecklistEvaluator,
     Evaluator,
@@ -18,6 +19,8 @@ from acr.evaluation.waste_analyzer import (
 )
 
 __all__ = [
+    "CalibrationBin",
+    "CalibrationReport",
     "ChecklistEvaluator",
     "CriterionScore",
     "DuplicateGroup",
@@ -30,6 +33,7 @@ __all__ = [
     "RegressionReport",
     "UtilizationReport",
     "analyze_context_utilization",
+    "compute_calibration",
     "detect_regression",
     "evaluate_with_panel",
     "find_duplicate_memories",

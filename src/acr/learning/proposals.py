@@ -13,9 +13,13 @@ Scope boundary (also explicit user intent: self-improve "for the design
 and intent it was given," not unboundedly): a proposal can only ever
 invoke a mechanism this codebase already exposes as a reviewable, gated
 operation (`acr.skills.evolution.promote_evolution`, itself safe-mode-
-aware). There is no proposal kind — and never will be one added here —
-that edits ACR's own source code, dependencies, or permission grants;
-those stay entirely outside what "self-improvement" means in this system.
+aware) — or, when no safe mechanism to auto-apply exists at all
+(`ROUTING_OPTIMIZATION`: see `acr.learning.routing_optimization`), stay
+strictly advisory, never silently mutating environment/config as a side
+effect of approval. There is no proposal kind — and never will be one
+added here — that edits ACR's own source code, dependencies, or
+permission grants; those stay entirely outside what "self-improvement"
+means in this system.
 """
 
 from __future__ import annotations
@@ -33,6 +37,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from acr.config import Settings
 from acr.db.base import Base
+from acr.learning.routing_optimization import ModelOutcome, RoutingComparison, compare_models
 from acr.security.audit import record_audit_event
 from acr.skills.evolution import EvolutionComparison, compare_versions, promote_evolution
 from acr.skills.registry import SkillNotFoundError, get
@@ -49,6 +54,7 @@ def _utcnow() -> datetime:
 
 class ProposalKind(StrEnum):
     SKILL_EVOLUTION_PROMOTION = "skill_evolution_promotion"
+    ROUTING_OPTIMIZATION = "routing_optimization"
 
 
 class ProposalStatus(StrEnum):
@@ -142,7 +148,7 @@ async def propose_skill_evolution(
     )
 
     if auto_apply:
-        await _apply(session, proposal, comparison, safe_mode=settings.safe_mode)
+        await _apply(session, proposal, safe_mode=settings.safe_mode)
         proposal.status = ProposalStatus.AUTO_APPLIED
         proposal.decided_at = _utcnow()
         await record_audit_event(
@@ -156,13 +162,67 @@ async def propose_skill_evolution(
     return proposal
 
 
-async def _apply(
-    session: AsyncSession, proposal: Proposal, comparison: EvolutionComparison, *, safe_mode: bool
-) -> None:
+async def propose_routing_optimization(
+    session: AsyncSession,
+    settings: Settings,
+    telemetry: TelemetryRecorder,
+    *,
+    task_class: str,
+    current: ModelOutcome,
+    candidate: ModelOutcome,
+) -> Proposal | None:
+    """Compare `candidate` against `current` (both `ModelOutcome`s from
+    `routing_optimization.model_outcomes_for_task_class()`) and, only if
+    the comparison actually recommends switching, create an advisory
+    `Proposal` for it.
+
+    Never auto-applies regardless of `Settings.auto_apply_proposals` --
+    unlike skill evolution, there is no safe mechanism to change routing
+    on ACR's own authority (see module docstring and
+    `acr.learning.routing_optimization`'s). Approving this proposal kind
+    means "a human reviewed the evidence," not "a change was applied."
+    """
+    if not settings.self_improvement_enabled:
+        raise SelfImprovementDisabledError(
+            "self-improvement is disabled (ACR_SELF_IMPROVEMENT_ENABLED=0)"
+        )
+
+    comparison: RoutingComparison = compare_models(current, candidate, task_class=task_class)
+    if not comparison.recommend_switch:
+        return None
+
+    proposal = Proposal(
+        kind=ProposalKind.ROUTING_OPTIMIZATION,
+        subject=task_class,
+        payload=asdict(comparison),
+        reason=comparison.reason,
+        status=ProposalStatus.PENDING,
+    )
+    session.add(proposal)
+    await session.flush()
+
+    await record_audit_event(
+        session,
+        telemetry,
+        action=f"proposal.create:{proposal.id}",
+        outcome="pending",
+        detail={"kind": proposal.kind.value, "subject": proposal.subject},
+    )
+
+    return proposal
+
+
+async def _apply(session: AsyncSession, proposal: Proposal, *, safe_mode: bool) -> None:
     if proposal.kind is ProposalKind.SKILL_EVOLUTION_PROMOTION:
+        comparison = EvolutionComparison(**proposal.payload)
         baseline = await get(session, comparison.baseline_id)
         assert baseline is not None  # existed when the proposal was created
         await promote_evolution(session, baseline, comparison.candidate_id, safe_mode=safe_mode)
+        return
+    if proposal.kind is ProposalKind.ROUTING_OPTIMIZATION:
+        # Advisory only -- see module docstring. Approving means "reviewed
+        # by a human," not "changed": there is no safe, gated mechanism to
+        # flip Settings.default_min_quality_tier from inside this process.
         return
     raise NotImplementedError(f"no applier registered for proposal kind {proposal.kind!r}")
 
@@ -180,8 +240,7 @@ async def approve_proposal(
     if proposal.status is not ProposalStatus.PENDING:
         raise ProposalNotPendingError(f"proposal {proposal_id} is already {proposal.status.value}")
 
-    comparison = EvolutionComparison(**proposal.payload)
-    await _apply(session, proposal, comparison, safe_mode=safe_mode)
+    await _apply(session, proposal, safe_mode=safe_mode)
 
     proposal.status = ProposalStatus.APPROVED
     proposal.decided_at = _utcnow()

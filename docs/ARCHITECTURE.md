@@ -724,6 +724,52 @@ a ring's position, both light and dark themes and a mobile viewport
 checked, `.claude/launch.json` added so `acr dashboard serve` previews
 directly in future sessions.
 
+### Neo-cyber alternate theme (2026-07-29)
+
+Added a second, opt-in theme rather than replacing the default one:
+`:root[data-theme="cyber"]` in `base.html` redefines every design token
+(cyan/magenta-violet duotone on near-black, angular 2px radii and
+rectangular pill tags instead of 4px/999px rounded, a scanline overlay and
+a faint accent-colored grid texture, neon glow via a shared
+`--glow-accent`/`--glow-danger` box/text-shadow token) — a deliberate
+single dark world, not a light/dark pair, since a "neo cyber" identity
+doesn't have a coherent light-mode counterpart; the existing warm
+light/dark theme is untouched and stays the default.
+
+A nav toggle (`#theme-default` / `#theme-cyber`) sets `data-theme` on
+`<html>` and persists the choice to `localStorage["acr-theme"]`; an inline
+`<head>` script (not deferred) applies the saved choice before first paint
+so navigating between pages never flashes the wrong theme. Because
+`visualization.js` already reads its palette from CSS custom properties at
+render time (see above), the canvas graph re-themes automatically with no
+JS changes to its color logic — the only addition there is a `--canvas-glow`
+token (a plain number, 0 outside the cyber theme) that `withGlow()` reads
+to apply real `ctx.shadowBlur`/`shadowColor` to the core, memory rings,
+task/agent markers, and event dots, always resetting `shadowBlur` after
+each shape since canvas shadow state otherwise leaks into whatever draws
+next.
+
+One real bug surfaced and fixed while building this: `body` originally
+declared `background: var(--bg);` (shorthand) followed by a separate
+`background-image: var(--bg-texture);` (longhand). Mixing a `var()`
+shorthand with an explicit longhand override of a sibling sub-property is
+a known CSS footgun — inspecting the parsed CSSOM directly
+(`document.styleSheets`) showed the browser's expanded `background-color`
+sub-value coming back empty, and the page fell back to a stale color
+instead of the current theme's. Fixed by using `background-color: var(--bg)`
+as its own explicit longhand instead of the shorthand. Verified via the
+browser: `getComputedStyle` on `--bg` (correct immediately in both cases)
+vs. on the actual `background-color` (broken before the fix, correct
+after), all cyber-theme text/background contrast pairs computed live and
+passing WCAG AA (worst case 4.85:1), theme persistence across a page
+navigation, and both toggle directions. (A `transition: background-color
+0.2s` on `body` made `getComputedStyle` reads taken immediately after a
+programmatic click look stale in this session's headless preview — that
+environment doesn't composite frames, so CSS transitions there never
+settle; confirmed the real cascade was correct throughout by forcing
+`transition: none` and re-reading, unrelated to the shorthand bug above
+and not an issue for an actually-rendering browser.)
+
 ## Integrations: MCP server (Phase 13, first sub-slice)
 
 Master §1707-1713 lists six integration targets (MCP, Claude Code, Codex,

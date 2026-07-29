@@ -63,7 +63,25 @@
       warn: v("--warn", "#D9A24A"),
       danger: v("--danger", "#D9695A"),
       info: v("--info", "#7FA0C7"),
+      // A plain number (not a CSS length) the cyber theme sets to a real
+      // shadowBlur radius and every other theme leaves at 0 -- lets the
+      // canvas pick up "does this theme want glow" from the same token
+      // system as everything else, no second hardcoded theme check.
+      glow: parseFloat(v("--canvas-glow", "0")) || 0,
     };
+  }
+
+  // Wraps a draw call with ctx.shadowBlur/shadowColor set to `color`, then
+  // resets shadowBlur to 0 afterward -- canvas shadow state persists
+  // across draw calls otherwise, so every unrelated shape drawn after a
+  // glowing one would silently inherit the glow too.
+  function withGlow(th, color, fn) {
+    if (th.glow > 0) {
+      ctx.shadowBlur = th.glow;
+      ctx.shadowColor = color;
+    }
+    fn();
+    if (th.glow > 0) ctx.shadowBlur = 0;
   }
 
   function statusColors(t) {
@@ -242,13 +260,15 @@
     const idlePulse = 4 * Math.sin(elapsed / 600);
     const flashing = performance.now() < pulseUntil;
     const radius = 34 + idlePulse + (flashing ? 14 : 0);
-    ctx.beginPath();
-    ctx.arc(cx, cy, Math.max(radius, 4), 0, Math.PI * 2);
-    ctx.fillStyle = flashing ? th.warn : th.accent + "55";
-    ctx.fill();
-    ctx.strokeStyle = th.accent;
-    ctx.lineWidth = 2;
-    ctx.stroke();
+    withGlow(th, th.accent, () => {
+      ctx.beginPath();
+      ctx.arc(cx, cy, Math.max(radius, 4), 0, Math.PI * 2);
+      ctx.fillStyle = flashing ? th.warn : th.accent + "55";
+      ctx.fill();
+      ctx.strokeStyle = th.accent;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    });
     hoverTargets.push({ x: cx, y: cy, r: radius, label: "core", detail: "pulses on each new telemetry event" });
   }
 
@@ -256,13 +276,16 @@
     const palette = typePalette(th);
     if (!ringSim.length) return;
     ringSim.forEach((s) => {
-      ctx.beginPath();
-      ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
-      ctx.fillStyle = colorForType(s.type, palette) + "aa";
-      ctx.fill();
-      ctx.strokeStyle = s.pinned ? th.ink : colorForType(s.type, palette);
-      ctx.lineWidth = s.pinned ? 2 : 1;
-      ctx.stroke();
+      const swatch = colorForType(s.type, palette);
+      withGlow(th, swatch, () => {
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+        ctx.fillStyle = swatch + "aa";
+        ctx.fill();
+        ctx.strokeStyle = s.pinned ? th.ink : swatch;
+        ctx.lineWidth = s.pinned ? 2 : 1;
+        ctx.stroke();
+      });
       ctx.fillStyle = th.inkDim;
       ctx.font = "11px system-ui, sans-serif";
       ctx.textAlign = "center";
@@ -280,8 +303,11 @@
     const tasks = latest.tasks;
     tasks.forEach((task, i) => {
       const x = 30 + i * ((width - 60) / Math.max(tasks.length, 1));
-      ctx.fillStyle = colors[task.status] || th.inkDim;
-      ctx.fillRect(x, y - 6, 12, 12);
+      const swatch = colors[task.status] || th.inkDim;
+      withGlow(th, swatch, () => {
+        ctx.fillStyle = swatch;
+        ctx.fillRect(x, y - 6, 12, 12);
+      });
       hoverTargets.push({
         x: x + 6, y, r: 10,
         label: task.objective || "(task)",
@@ -300,12 +326,15 @@
     agents.forEach((agent, i) => {
       const x = 30 + i * ((width - 60) / Math.max(agents.length, 1));
       const size = 6 + agent.quality_score * 10;
-      ctx.save();
-      ctx.translate(x, y);
-      ctx.rotate(Math.PI / 4);
-      ctx.fillStyle = (agent.succeeded ? th.ok : th.danger) + "99";
-      ctx.fillRect(-size / 2, -size / 2, size, size);
-      ctx.restore();
+      const swatch = agent.succeeded ? th.ok : th.danger;
+      withGlow(th, swatch, () => {
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(Math.PI / 4);
+        ctx.fillStyle = swatch + "99";
+        ctx.fillRect(-size / 2, -size / 2, size, size);
+        ctx.restore();
+      });
       hoverTargets.push({
         x, y, r: Math.max(size, 10),
         label: agent.task_class + " (" + agent.worker_count + " worker" + (agent.worker_count === 1 ? "" : "s") + ")",
@@ -330,10 +359,13 @@
     events.forEach((e, i) => {
       const x = width - 30 - i * ((width - 60) / Math.max(events.length, 1, 40));
       const fresh = i === 0 && performance.now() < pulseUntil;
-      ctx.beginPath();
-      ctx.arc(x, y, fresh ? 5 : 3, 0, Math.PI * 2);
-      ctx.fillStyle = fresh ? th.warn : th.accent + "88";
-      ctx.fill();
+      const swatch = fresh ? th.warn : th.accent;
+      withGlow(th, swatch, () => {
+        ctx.beginPath();
+        ctx.arc(x, y, fresh ? 5 : 3, 0, Math.PI * 2);
+        ctx.fillStyle = fresh ? th.warn : th.accent + "88";
+        ctx.fill();
+      });
       hoverTargets.push({
         x, y, r: 8,
         label: e.event_type,

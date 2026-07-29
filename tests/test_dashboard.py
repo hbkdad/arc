@@ -218,6 +218,20 @@ async def test_proposals_page_renders_with_none_yet(migrated_settings: Settings)
     assert "No proposals yet" in response.text
 
 
+async def test_overview_page_offers_a_neo_cyber_theme_toggle(
+    migrated_settings: Settings,
+) -> None:
+    response = _client(migrated_settings).get("/")
+
+    assert response.status_code == 200
+    assert 'id="theme-cyber"' in response.text
+    assert 'id="theme-default"' in response.text
+    assert ':root[data-theme="cyber"]' in response.text
+    # The toggle script must exist wherever the buttons do -- a page with
+    # the buttons but no handler would render inert, unclickable controls.
+    assert "setTheme" in response.text
+
+
 async def test_visualization_page_renders_the_canvas_and_script(
     migrated_settings: Settings,
 ) -> None:

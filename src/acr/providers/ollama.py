@@ -11,8 +11,23 @@ import httpx
 from acr.providers.base import CompletionRequest, CompletionResult, ModelProvider
 
 DEFAULT_BASE_URL = "http://localhost:11434"
-_AVAILABILITY_TIMEOUT_SECONDS = 1.0
-_COMPLETION_TIMEOUT_SECONDS = 60.0
+# Not just network latency to a local daemon (which should be near-
+# instant) -- measured on Windows, a *fresh process's first* httpx
+# request can itself take 1.2-7.2s of cold-start overhead (socket/AV
+# interception, asyncio proactor setup) before any bytes cross the wire,
+# confirmed by comparing against `curl` (instant) and a warmed-up client
+# in the same process (also fast). 1.0s was tight enough to make
+# is_available() report a real, running Ollama daemon as unreachable.
+_AVAILABILITY_TIMEOUT_SECONDS = 5.0
+# Measured directly against a real, already-warm (2.2s load) local model on
+# unaccelerated (CPU-only) hardware: ~10 seconds per generated token. At the
+# default max_output_tokens=512, 60s wasn't enough to produce even 6 tokens
+# -- meaning close to *every* real completion request would fail via
+# timeout on exactly the hardware profile ("run it on your own machine, no
+# GPU required") this local-first tool is built around. Generous rather
+# than tight: a genuinely hung/broken daemon should still time out
+# eventually, but shouldn't be confused with "just slow".
+_COMPLETION_TIMEOUT_SECONDS = 300.0
 
 
 class OllamaNoModelError(RuntimeError):

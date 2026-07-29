@@ -66,13 +66,26 @@ async def check_mock_provider() -> CheckResult:
     return CheckResult("provider_mock", status, "zero-config default provider")
 
 
-async def check_ollama_provider() -> CheckResult:
+async def check_ollama_provider(settings: Settings) -> CheckResult:
     available = await OllamaProvider().is_available()
-    if available:
-        return CheckResult("provider_ollama", CheckStatus.OK, "reachable at localhost:11434")
-    return CheckResult(
-        "provider_ollama", CheckStatus.WARN, "not reachable (optional — mock provider is used)"
-    )
+    if not available:
+        return CheckResult(
+            "provider_ollama", CheckStatus.WARN, "not reachable (optional — mock provider is used)"
+        )
+    if settings.default_min_quality_tier < 1:
+        # Deliberately doesn't change routing behavior itself (tier 0 must
+        # stay deterministically mock, zero-config -- see
+        # Settings.default_min_quality_tier's own docstring) -- this only
+        # makes the one-command path to "actually use the Ollama that's
+        # sitting right there" visible, instead of a silently-safe but
+        # silently-unused local daemon.
+        return CheckResult(
+            "provider_ollama",
+            CheckStatus.WARN,
+            "reachable at localhost:11434, but ACR still defaults to the mock provider -- "
+            "set ACR_DEFAULT_MIN_QUALITY_TIER=1 (or pass --min-quality-tier 1) to use it",
+        )
+    return CheckResult("provider_ollama", CheckStatus.OK, "reachable at localhost:11434")
 
 
 async def run_checks(settings: Settings) -> list[CheckResult]:
@@ -84,5 +97,5 @@ async def run_checks(settings: Settings) -> list[CheckResult]:
     finally:
         await engine.dispose()
     results.append(await check_mock_provider())
-    results.append(await check_ollama_provider())
+    results.append(await check_ollama_provider(settings))
     return results

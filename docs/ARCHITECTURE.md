@@ -978,6 +978,48 @@ short-circuit was tested), and `doctor.py`/`github_search.py`/
 `browser.py` had untested error-handling branches — the same shape of gap
 that hid the Ollama hardcoded-model bug above.
 
+### Ollama reliability fixes (real-hardware measurements, 2026-07-29)
+
+Investigating "why doesn't ACR actually use my running Ollama daemon by
+default" (see "What's left" below for why the *default* itself isn't
+changing) surfaced two more real, measured bugs in
+`acr.providers.ollama`, on top of the earlier hardcoded-model fix:
+
+- **`is_available()`'s 1.0s timeout was too tight.** A real Ollama daemon
+  was demonstrably running and reachable (`curl` returned instantly), but
+  `OllamaProvider().is_available()` reported it unreachable. Root cause:
+  a *fresh process's first* httpx request carries real cold-start
+  overhead — measured 1.2-7.2s across repeated runs on this Windows
+  machine — before any bytes cross the wire (a warmed-up client in the
+  same process, or `curl`, both stayed fast). Every `acr` CLI invocation
+  is a fresh process, so this hit every single availability check, not
+  just a first one. Raised to 5.0s.
+- **`complete()`'s 60s timeout was too tight for CPU-only inference.**
+  Measured directly against a real, already-warm (2.2s load time) local
+  model: ~10 seconds per generated token with no GPU acceleration. At the
+  default `max_output_tokens=512`, 60s wasn't enough to produce even 6
+  tokens — meaning close to *every* real completion would fail via
+  timeout on exactly the "run it on your own modest hardware" profile
+  this local-first tool is built around. Raised to 300s.
+
+Both were verified end-to-end for real after the fix (not just unit
+tests against a fake server): `acr run "..." --min-quality-tier 1`
+genuinely completed via the real local daemon, ~82s wall clock, which
+would have failed at the old 60s ceiling. A regression-guard test asserts
+both constants stay generous so a future "simplification" can't quietly
+reintroduce either regression without re-measuring against real hardware
+first.
+
+`acr doctor` also now surfaces the actual one-command fix when it
+matters: if Ollama is reachable but `default_min_quality_tier` is still
+0, `provider_ollama`'s detail names `ACR_DEFAULT_MIN_QUALITY_TIER`
+directly instead of a bare "not reachable"/"OK" that leaves a user
+guessing why `acr run` still used mock. This is deliberately *not* a
+change to the routing default itself — `min_quality_tier=0` must stay
+deterministically mock so scripts/automation depending on that exact,
+already-tested guarantee never break — just a fix to make the existing
+opt-in path visible.
+
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs on every push to `main` and every PR:
@@ -1141,14 +1183,19 @@ deferred gaps, each with a reason rather than an oversight:
   self-improvement" above) — a second proposal kind is a matter of
   writing a new evidence-producing comparison and an `_apply()` branch,
   not a redesign.
-- **Real Ollama/cloud provider usage by default** — fixed to be reachable
-  (see "Real provider routing" above: `--min-quality-tier`/`min_quality_tier`
-  now actually route there) and `Settings.default_min_quality_tier` makes
-  a raised tier sticky without needing the flag every call, but `0`/mock
-  stays the *out-of-box* default deliberately — a fresh install shouldn't
+- **Real Ollama/cloud provider usage by default** — reachable (`--min-
+  quality-tier`/`min_quality_tier`, `Settings.default_min_quality_tier`
+  for a sticky opt-in) and now actually *reliable* when opted into (see
+  "Ollama reliability fixes" above — a real, measured availability-check
+  and completion-timeout bug, not just a routing gap, previously made
+  even an explicit opt-in fail on real hardware). `acr doctor` surfaces
+  the opt-in path directly when Ollama is reachable. `0`/mock still stays
+  the *out-of-box* default deliberately — a fresh install shouldn't
   silently start making paid API calls or depend on a local daemon being
-  up. Still a real gap if the goal is "just works with whatever's
-  configured, no settings" rather than "one-time opt-in."
+  up, and this is a documented, tested guarantee scripts/automation can
+  rely on. Still a real gap if the goal is "just works with whatever's
+  configured, no settings" rather than "one-time opt-in" — that would be
+  a product decision about the default itself, not a bug to fix.
 - **CI** — done: `.github/workflows/ci.yml` (see "Continuous integration"
   above).
 

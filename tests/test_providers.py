@@ -12,7 +12,12 @@ import pytest
 
 from acr.providers.base import CompletionRequest
 from acr.providers.mock import MockProvider
-from acr.providers.ollama import OllamaNoModelError, OllamaProvider
+from acr.providers.ollama import (
+    _AVAILABILITY_TIMEOUT_SECONDS,
+    _COMPLETION_TIMEOUT_SECONDS,
+    OllamaNoModelError,
+    OllamaProvider,
+)
 
 
 async def test_mock_provider_completes_deterministically() -> None:
@@ -134,3 +139,16 @@ async def test_ollama_complete_raises_a_clear_error_with_no_models_pulled(
 
     with pytest.raises(OllamaNoModelError, match="ollama pull"):
         await provider.complete(CompletionRequest(prompt="hi"))
+
+
+def test_ollama_timeouts_stay_generous_for_real_unaccelerated_hardware() -> None:
+    # Regression guard, not a behavioral test: both constants were raised
+    # after being measured as genuinely too tight against real local
+    # hardware (1.0s availability timeout false-negatived a running daemon
+    # due to ~1-7s httpx cold-start overhead; 60s completion timeout wasn't
+    # enough for even a handful of tokens at ~10s/token on CPU-only
+    # inference). Guards against a future "simplification" quietly
+    # reintroducing either regression without re-measuring against real
+    # hardware first.
+    assert _AVAILABILITY_TIMEOUT_SECONDS >= 5.0
+    assert _COMPLETION_TIMEOUT_SECONDS >= 120.0

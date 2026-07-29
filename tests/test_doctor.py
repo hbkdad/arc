@@ -12,9 +12,11 @@ from acr.doctor import (
     CheckStatus,
     check_data_dir,
     check_database,
+    check_ollama_provider,
     check_python_version,
     run_checks,
 )
+from acr.providers.ollama import OllamaProvider
 
 
 def test_check_python_version_is_ok_on_the_running_interpreter() -> None:
@@ -73,6 +75,35 @@ async def test_check_database_fails_cleanly_when_the_db_path_is_unusable(
 
     assert result.status is CheckStatus.FAIL
     assert result.name == "database"
+
+
+async def _reachable(self: OllamaProvider) -> bool:
+    return True
+
+
+async def test_check_ollama_provider_hints_at_the_default_tier_setting_when_reachable(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Reachable but ACR still defaults to mock (default_min_quality_tier=0)
+    # -- must surface the one-command fix rather than silently staying on
+    # mock with no indication a real local model is sitting right there.
+    monkeypatch.setattr(OllamaProvider, "is_available", _reachable)
+
+    result = await check_ollama_provider(settings)
+
+    assert result.status is CheckStatus.WARN
+    assert "ACR_DEFAULT_MIN_QUALITY_TIER" in result.detail
+
+
+async def test_check_ollama_provider_is_ok_when_reachable_and_tier_is_configured(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(OllamaProvider, "is_available", _reachable)
+    settings.default_min_quality_tier = 1
+
+    result = await check_ollama_provider(settings)
+
+    assert result.status is CheckStatus.OK
 
 
 async def test_run_checks_reports_python_data_dir_database_and_providers(

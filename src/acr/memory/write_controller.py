@@ -150,9 +150,20 @@ async def apply(
         now = utcnow()
         old.status = MemoryStatus.SUPERSEDED
         old.valid_until = now
-        new = _new_record(
-            candidate, status=MemoryStatus.CONFIRMED, supersedes=old.id, valid_from=now
+        # A correction must clear the same confirmation bar as a brand-new
+        # fact (STORE_CONFIRMED vs STORE_CANDIDATE above) -- otherwise a
+        # low-confidence correction (just above MIN_CONFIDENCE_TO_STORE,
+        # with any evidence string at all) would jump straight to CONFIRMED
+        # and become the trusted, temporally-current value for its subject
+        # (see acr.security.trust's memory_trust_level() and
+        # acr.memory.temporal's current(), both of which only look at
+        # CONFIRMED records) without ever having earned that trust level.
+        new_status = (
+            MemoryStatus.CONFIRMED
+            if candidate.confidence >= MIN_CONFIDENCE_FOR_CONFIRMED
+            else MemoryStatus.CANDIDATE
         )
+        new = _new_record(candidate, status=new_status, supersedes=old.id, valid_from=now)
         session.add(new)
         await session.flush()
         old.superseded_by = new.id

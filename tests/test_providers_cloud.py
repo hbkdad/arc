@@ -147,3 +147,20 @@ async def test_openai_compatible_complete_parses_response_and_sends_auth(
     assert handler.last_json is not None
     assert handler.last_json["messages"] == [{"role": "user", "content": "hi"}]
     assert handler.last_json["max_tokens"] == 64
+
+
+async def test_openai_compatible_complete_degrades_gracefully_on_an_empty_choices_list(
+    fake_http_server: tuple[str, type[_RecordingHandler]],
+) -> None:
+    # A response that's valid JSON but doesn't have the expected shape (an
+    # empty `choices`, or a function-call-only response with no `content`)
+    # must produce an empty completion, not a raw KeyError/IndexError --
+    # consistent with anthropic_compatible.py, which already handles the
+    # equivalent case defensively.
+    base_url, handler = fake_http_server
+    handler.response_body = json.dumps({"choices": [], "usage": {}}).encode()
+    provider = OpenAICompatibleProvider(api_key="sk-fake", base_url=base_url)
+
+    result = await provider.complete(CompletionRequest(prompt="hi"))
+
+    assert result.text == ""

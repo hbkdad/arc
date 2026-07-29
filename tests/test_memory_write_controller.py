@@ -84,6 +84,26 @@ async def test_contradicting_fact_with_evidence_supersedes(db_session: AsyncSess
     assert original.superseded_by == replacement.id
 
 
+async def test_low_confidence_correction_supersedes_as_candidate_not_confirmed(
+    db_session: AsyncSession,
+) -> None:
+    # A correction must clear the same MIN_CONFIDENCE_FOR_CONFIRMED bar a
+    # brand-new fact does (see test_medium_confidence_fact_is_stored_as_candidate)
+    # -- otherwise a weakly-evidenced "correction" could jump straight to
+    # CONFIRMED (the only status current()/memory_trust_level() treat as
+    # trusted/temporally-current) without ever earning that trust level.
+    _, original = await remember(db_session, _candidate(confidence=0.9))
+    assert original is not None
+
+    evaluation, replacement = await remember(
+        db_session, _candidate(confidence=0.3, content="ACR uses PostgreSQL.")
+    )
+
+    assert evaluation.decision is WriteDecision.SUPERSEDE_EXISTING
+    assert replacement is not None
+    assert replacement.status is MemoryStatus.CANDIDATE
+
+
 async def test_temporary_type_is_stored_temporarily(db_session: AsyncSession) -> None:
     evaluation, record = await remember(db_session, _candidate(type=MemoryType.TEMPORARY))
     assert evaluation.decision is WriteDecision.STORE_TEMPORARY

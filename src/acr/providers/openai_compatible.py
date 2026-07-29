@@ -52,7 +52,8 @@ class OpenAICompatibleProvider(ModelProvider):
             response.raise_for_status()
             data = response.json()
 
-        text = data["choices"][0]["message"]["content"]
+        choices = data.get("choices") or [{}]
+        text = choices[0].get("message", {}).get("content") or ""
         usage = data.get("usage", {})
         return CompletionResult(
             text=text,

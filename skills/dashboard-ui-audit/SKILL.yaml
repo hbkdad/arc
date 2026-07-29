@@ -1,0 +1,23 @@
+id: dashboard-ui-audit
+name: Dashboard UI Audit
+version: "1.0.0"
+description: Audit a web dashboard's UI for consistency and accessibility gaps by reading its own source instead of guessing from a screenshot.
+task_classes:
+  - ui-audit
+  - dashboard-review
+inputs:
+  target: string
+outputs:
+  findings: string
+dependencies: []
+permissions:
+  - network.read
+tools:
+  - browser_fetch
+models: []
+token_estimate: 350
+applicability: Use when a task asks to review, audit, or improve a web dashboard's or admin UI's design.
+contraindications: Do not use for backend/API-only review tasks with no rendered UI, or for a single isolated component with no surrounding design system to check consistency against.
+verification: Every finding must cite the specific file/selector, computed style value, or CSS rule (or its absence) that proves it -- never a subjective "looks off" claim with no evidence.
+origin: manual
+author: acr-team

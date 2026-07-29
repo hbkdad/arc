@@ -341,6 +341,30 @@ successful/total ratio a skill has earned) -> estimate token overhead
 `task_classes` are a subset of an already-kept, higher-scoring candidate's)
 -> return the top `max_skills`.
 
+### First-party skill library (2026-07-29)
+
+`skills/` (repo root, alongside `tests/fixtures/skills/`'s test-only
+fixtures) holds ACR's actual, registered-and-active skill packages —
+`dashboard-ui-audit`, `ui-design-critique`, `code-review-checklist`,
+`context-minimization`. Each declares only tools/permissions ACR's real
+registries have (`acr.tools.default_tools.build_default_registry()`,
+`acr.security.permissions.Capability`) — `acr skills register` doesn't
+validate at registration time, so a manifest referencing a since-renamed
+capability or a tool that doesn't exist would otherwise fail silently
+until someone happened to run `acr skills validate --check-tools` by
+hand. `tests/test_real_skills.py` parametrizes over every directory under
+`skills/`, registers it, and asserts `run_validation(..., tool_registry=
+build_default_registry())` passes — a regression guard against exactly
+that drift, not just a fixture-only validation test.
+
+These four were written, not ported wholesale from Claude Code's own
+~200-skill library: most of those are tied to connectors ACR doesn't have
+(Figma, Slack, Zapier, ...), and registering a skill declaring a tool ACR
+can't actually invoke would be a false capability claim in its own skill
+registry — the opposite of the evidence-based design memory/skills were
+built around (master principle #22). Only tool-agnostic, generically
+applicable methodology made the cut.
+
 ## Evaluation system (Phase 5)
 
 `acr.evaluation.evaluators.Evaluator` is the interface every evaluator

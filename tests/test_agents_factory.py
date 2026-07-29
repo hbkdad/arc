@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from acr.agents.factory import estimate_spawn, spawn_agent
+from acr.agents.factory import SpawnNotWorthwhileError, estimate_spawn, spawn_agent
 from acr.agents.models import AgentSpec
 from acr.core.tasks.models import TaskStatus
 from acr.providers.mock import MockProvider
@@ -64,3 +65,34 @@ async def test_spawn_agent_runs_the_objective_through_the_task_engine(
 
     assert task.status is TaskStatus.COMPLETED
     assert task.objective == "say hello"
+
+
+async def test_spawn_agent_refuses_an_overloaded_spec_without_force(
+    db_session: AsyncSession,
+) -> None:
+    # The cost/risk gate must be enforced by spawn_agent() itself, not only
+    # by the CLI command that happens to be its one caller today -- any
+    # future caller (MCP exposure, planner auto-run) must not be able to
+    # silently bypass it just by calling this function directly.
+    spec = _spec(
+        objective="say hello",
+        tools=[f"tool-{i}" for i in range(20)],
+        permissions=[f"perm-{i}" for i in range(20)],
+    )
+
+    with pytest.raises(SpawnNotWorthwhileError):
+        await spawn_agent(db_session, spec, MockProvider(), TelemetryRecorder())
+
+
+async def test_spawn_agent_runs_an_overloaded_spec_when_forced(
+    db_session: AsyncSession,
+) -> None:
+    spec = _spec(
+        objective="say hello",
+        tools=[f"tool-{i}" for i in range(20)],
+        permissions=[f"perm-{i}" for i in range(20)],
+    )
+
+    task = await spawn_agent(db_session, spec, MockProvider(), TelemetryRecorder(), force=True)
+
+    assert task.status is TaskStatus.COMPLETED

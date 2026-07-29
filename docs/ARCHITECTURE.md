@@ -864,7 +864,7 @@ uv run acr skills evolve <id> [--description "..."]
 uv run acr skills compare-evolution <baseline-id> <candidate-id>
 uv run acr skills promote-evolution <baseline-id> <candidate-id>
 uv run acr skills rollback-evolution <active-id> <restore-id>
-uv run acr agents plan "objective" [--task-class X]        # AgentSpec via real routing + exposure
+uv run acr agents plan "objective" [--role X --token-budget N]  # AgentSpec via real routing + exposure
 uv run acr agents spawn "objective" [--force]               # estimate -> run_task() -> critic review
 uv run acr agents topology <task-class>                     # evidence-gated worker-count recommendation
 uv run acr dashboard serve [--host --port]   # dashboard + /visualization: http://127.0.0.1:8765

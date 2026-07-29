@@ -1,8 +1,9 @@
 """ACR command-line interface (master spec §61).
 
-`doctor`, `version`, `run`, and `context compile` are implemented so far; the
-remaining subcommands (`task`, `status`, `memory`, `skills`, ...) land with
-the phases that give them something real to do.
+Every subcommand is a thin wrapper over a real, tested module elsewhere in
+`acr` — this file wires Typer arguments to those functions and formats
+their output; it holds no business logic of its own. See
+docs/ARCHITECTURE.md's command reference for the full, current list.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ import typer
 
 from acr import __version__
 from acr.agents.critic import review_agent_task
-from acr.agents.factory import estimate_spawn, spawn_agent
+from acr.agents.factory import SpawnNotWorthwhileError, estimate_spawn, spawn_agent
 from acr.agents.models import AgentSpec, SpawnEstimate
 from acr.agents.planner import plan_agent
 from acr.agents.topology import TopologyRecommendation, recommend_topology
@@ -978,9 +979,12 @@ def agents_spawn(
         async with session_scope(settings) as session:
             spec = await plan_agent(session, objective, role=role)
             estimate = estimate_spawn(spec)
-            if not estimate.worth_spawning and not force:
+            try:
+                task = await spawn_agent(
+                    session, spec, MockProvider(), TelemetryRecorder(), force=force
+                )
+            except SpawnNotWorthwhileError:
                 return spec, estimate, None
-            task = await spawn_agent(session, spec, MockProvider(), TelemetryRecorder())
             await session.commit()
             return spec, estimate, task
 

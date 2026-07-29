@@ -23,6 +23,19 @@ _BASE_QUALITY_GAIN_UNSCOPED = 0.2
 _BASE_QUALITY_GAIN_SCOPED = 0.5
 
 
+class SpawnNotWorthwhileError(RuntimeError):
+    """Raised by `spawn_agent()` when `estimate_spawn(spec)` says spawning
+    isn't worth it and the caller didn't pass `force=True`."""
+
+    def __init__(self, estimate: SpawnEstimate) -> None:
+        self.estimate = estimate
+        super().__init__(
+            "estimate does not justify spawning "
+            f"(quality_gain={estimate.expected_quality_gain:.2f}, "
+            f"overhead+risk={estimate.coordination_overhead + estimate.security_risk:.2f})"
+        )
+
+
 def estimate_spawn(spec: AgentSpec) -> SpawnEstimate:
     """Deterministic v1 estimate (master §765-770).
 
@@ -53,6 +66,18 @@ async def spawn_agent(
     spec: AgentSpec,
     provider: ModelProvider,
     telemetry: TelemetryRecorder,
+    *,
+    force: bool = False,
 ) -> Task:
-    """Run `spec.objective` end to end via the task engine."""
+    """Run `spec.objective` end to end via the task engine.
+
+    Refuses to run when `estimate_spawn(spec)` says it isn't worth it,
+    unless `force=True` -- this is the actual enforcement point for the
+    cost/risk gate this module's docstring describes. It used to live only
+    in the CLI's own `agents spawn` command (this function ran
+    unconditionally), so any other caller would have silently bypassed it.
+    """
+    estimate = estimate_spawn(spec)
+    if not estimate.worth_spawning and not force:
+        raise SpawnNotWorthwhileError(estimate)
     return await run_task(session, spec.objective, provider, telemetry)

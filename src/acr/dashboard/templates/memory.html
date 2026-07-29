@@ -12,7 +12,7 @@
 <h2 class="section-label">By status</h2>
 <div class="metric-grid">
 {% for status, n in status_counts.items() %}
-<div class="metric-card"><span class="n">{{ n }}</span><span class="label">{{ status }}</span></div>
+<div class="metric-card {{ status | pill_class }}"><span class="n">{{ n }}</span><span class="label">{{ status }}</span></div>
 {% endfor %}
 </div>
 

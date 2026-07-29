@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 from collections.abc import AsyncIterator, Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -27,7 +28,17 @@ from acr.telemetry import models as _telemetry_models  # noqa: F401
 
 @pytest.fixture
 def isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
-    """Point ACR at a fresh temp data dir so tests never touch a real ~/.acr or repo /data."""
+    """Point ACR at a fresh temp data dir so tests never touch a real ~/.acr or repo /data.
+
+    Also clears any `ACR_*` variable already present in the host shell (e.g.
+    a developer's own persisted `ACR_DEFAULT_MIN_QUALITY_TIER`) before
+    setting the two below -- Settings reads `ACR_*` straight from the
+    process environment (see `Settings.model_config`'s `env_prefix`), so
+    without this a test's behavior could silently depend on whatever the
+    machine running it happens to have configured outside the test.
+    """
+    for key in [k for k in os.environ if k.startswith("ACR_")]:
+        monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("ACR_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("ACR_LOG_FORMAT", "console")
     get_settings.cache_clear()

@@ -26,6 +26,24 @@
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
 
+  // All layout math below (drawTasks, hitTest, ...) works in this fixed
+  // logical coordinate space -- the same 900x560 the canvas element was
+  // authored with. The *backing store* is separately scaled up by
+  // devicePixelRatio so the canvas renders sharp on hi-DPI displays
+  // instead of stretching a fixed-resolution buffer (the CSS width:100%
+  // previously did exactly that: same pixel data, blurrier the further
+  // the rendered size drifted from 900x560).
+  const LOGICAL_W = canvas.width;
+  const LOGICAL_H = canvas.height;
+
+  function fitCanvasToDisplay() {
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = LOGICAL_W * dpr;
+    canvas.height = LOGICAL_H * dpr;
+  }
+  fitCanvasToDisplay();
+  window.addEventListener("resize", fitCanvasToDisplay);
+
   // Pulled from the same design tokens base.html defines (light/dark both
   // handled automatically by the browser resolving the CSS custom
   // properties) rather than a second, hardcoded color set that would drift
@@ -166,8 +184,10 @@
 
   function canvasPoint(evt) {
     const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
+    // Map into the LOGICAL coordinate space (what hoverTargets/ringSim are
+    // expressed in), not the DPR-scaled backing-store pixel space.
+    const scaleX = LOGICAL_W / rect.width;
+    const scaleY = LOGICAL_H / rect.height;
     return { x: (evt.clientX - rect.left) * scaleX, y: (evt.clientY - rect.top) * scaleY };
   }
 
@@ -357,8 +377,13 @@
 
   function render(elapsed) {
     const th = theme();
-    const width = canvas.width;
-    const height = canvas.height;
+    const width = LOGICAL_W;
+    const height = LOGICAL_H;
+    const dpr = window.devicePixelRatio || 1;
+    // Reset (not compound -- setTransform is absolute) so every draw call
+    // below can keep using logical 900x560 coordinates while actually
+    // painting onto the DPR-scaled backing store.
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = th.bg;
     ctx.fillRect(0, 0, width, height);
     const cx = width / 2;

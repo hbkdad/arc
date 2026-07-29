@@ -13,7 +13,7 @@
 <h1>Task status</h1>
 <div class="metric-grid">
 {% for status, n in task_counts.items() %}
-<a class="metric-card" href="/tasks"><span class="n">{{ n }}</span><span class="label">{{ status }}</span></a>
+<a class="metric-card {{ status | pill_class }}" href="/tasks"><span class="n">{{ n }}</span><span class="label">{{ status }}</span></a>
 {% else %}
 <p class="empty">No tasks recorded yet.</p>
 {% endfor %}

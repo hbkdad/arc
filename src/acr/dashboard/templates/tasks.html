@@ -3,7 +3,7 @@
 <h1>Tasks</h1>
 <div class="metric-grid">
 {% for status, n in counts.items() %}
-<div class="metric-card"><span class="n">{{ n }}</span><span class="label">{{ status }}</span></div>
+<div class="metric-card {{ status | pill_class }}"><span class="n">{{ n }}</span><span class="label">{{ status }}</span></div>
 {% endfor %}
 </div>
 <div class="table-wrap">

@@ -1,14 +1,27 @@
-# ACR — Adaptive Cognitive Runtime
+# ACR: Adaptive Cognitive Runtime
 
 [![CI](https://github.com/hbkdad/arc/actions/workflows/ci.yml/badge.svg)](https://github.com/hbkdad/arc/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/acr-runtime.svg)](https://pypi.org/project/acr-runtime/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Local-first, model-independent AI orchestration and cognitive runtime.
+**A local-first AI orchestration runtime that runs entirely on your own
+machine.** Persistent memory, a skill system, task/agent orchestration,
+and multi-provider model routing, all on SQLite, with no cloud account,
+API key, or telemetry required to try it. Point it at your own local
+Ollama models when you want real inference, or keep it on the
+zero-config mock provider indefinitely; ACR never assumes you're online
+or paying for anything.
+
+```bash
+pip install acr-runtime
+acr db upgrade && acr doctor
+acr run "say hello"
+```
+
 Full specification: [`ACR_MASTER_SYSTEM_PROMPT.md`](ACR_MASTER_SYSTEM_PROMPT.md).
-Current state and toolchain: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-— that document is the single source of truth for exactly what phase this
-repo is at; nothing here duplicates that status so it can't drift stale.
+Current implementation state: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),
+the single source of truth for what's actually built, so nothing here
+duplicates that status and drifts stale.
 
 ## What's here
 
@@ -17,11 +30,10 @@ memory store, a skill registry with routing/validation/evolution, model
 and tool routing with safe-mode-aware permission checks, an agent
 planner/critic/topology system, an operational dashboard with a
 real-telemetry visualization, and an MCP server exposing ACR's memory,
-skill, web, and GitHub search tools to any MCP client. Runs entirely on
-SQLite with a zero-config mock model provider by default — no cloud
-account or API key required to try it. See
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full breakdown of
-what's implemented, how, and why.
+skill, web, and GitHub search tools to any MCP client, including
+project-scoped registration for both Claude Code and Codex CLI out of
+the box. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full
+breakdown of what's implemented, how, and why.
 
 ## Quick start
 
@@ -33,7 +45,7 @@ acr db upgrade            # create the local SQLite schema, no repo checkout nee
 acr doctor
 ```
 
-Or from a source checkout (for development — see [`CONTRIBUTING.md`](CONTRIBUTING.md)):
+Or from a source checkout (for development; see [`CONTRIBUTING.md`](CONTRIBUTING.md)):
 
 ```bash
 uv sync                 # install deps + local package into .venv
@@ -58,7 +70,7 @@ execution as MCP tools directly. Claude Code prompts for approval the
 first time it opens the project; Codex CLI only loads project-scoped
 config for a project you've marked trusted (`codex` trust prompt, or
 `trust_level = "trusted"` under `[projects."<path>"]` in your own
-`~/.codex/config.toml`) — either way, cloning the repo can't silently
+`~/.codex/config.toml`); either way, cloning the repo can't silently
 launch anything without you consenting.
 
 ## Development

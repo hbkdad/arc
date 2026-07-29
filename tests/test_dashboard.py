@@ -147,6 +147,21 @@ async def test_routing_page_lists_the_default_ladder(migrated_settings: Settings
     assert response.status_code == 200
     assert "mock" in response.text
     assert "available" in response.text
+    assert "No model calls recorded yet" in response.text
+
+
+async def test_routing_page_shows_real_usage_after_a_task(
+    migrated_settings: Settings, db_session: AsyncSession
+) -> None:
+    await run_task(db_session, "say hello", MockProvider(), TelemetryRecorder())
+
+    response = _client(migrated_settings).get("/routing")
+
+    assert response.status_code == 200
+    assert "mock" in response.text
+    assert "calls" in response.text.lower()
+    body = response.text
+    assert body.count("mock") >= 2  # once in the ladder table, once in usage
 
 
 async def test_security_page_lists_recent_audit_events(

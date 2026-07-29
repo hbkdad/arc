@@ -331,6 +331,23 @@ def test_models_route_reports_no_provider_available_cleanly(migrated_settings: S
     assert "no provider available" in result.stdout
 
 
+def test_models_usage_reports_nothing_with_no_calls_recorded(migrated_settings: Settings) -> None:
+    result = runner.invoke(app, ["models", "usage"])
+    assert result.exit_code == 0
+    assert "no model calls recorded" in result.stdout
+
+
+def test_models_usage_reports_real_calls_after_a_run(migrated_settings: Settings) -> None:
+    runner.invoke(app, ["run", "hello there"])
+
+    result = runner.invoke(app, ["models", "usage"])
+
+    assert result.exit_code == 0
+    assert "mock" in result.stdout
+    assert "calls=1" in result.stdout
+    assert "estimated_cost=0.0000" in result.stdout
+
+
 def test_tools_list_and_expose(migrated_settings: Settings) -> None:
     list_result = runner.invoke(app, ["tools", "list"])
     assert list_result.exit_code == 0

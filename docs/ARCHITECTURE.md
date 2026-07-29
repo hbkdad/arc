@@ -1112,6 +1112,41 @@ hardcoded-mock behavior breaks. Raising the tier opts into whatever's
 actually configured (Ollama first, then cloud, per the ladder's cost
 ordering).
 
+### Per-provider usage and cost tracking (2026-07-29)
+
+The `/routing` dashboard page showed the ladder's *configuration*
+(quality tier, price, live availability) but never any *usage* — a user
+who'd actually spent real Claude/Anthropic tokens through ACR had no way
+to see it there. `acr.telemetry.usage.usage_by_provider()` closes that
+purely by aggregating `model.call.completed` `TelemetryEvent` rows
+`core.execution.run_task()` already writes — no new instrumentation
+beyond adding `input_tokens` alongside the pre-existing `output_tokens` in
+that one event payload. Cost is estimated against each provider's
+*current* `cost_per_1k_tokens`; there's no historical price catalog, so
+older calls aren't re-priced retroactively — stated plainly in both the
+CLI (`acr models usage`) and the dashboard, not hidden. A provider with
+real usage but no currently-configured `ModelProfile` still shows its
+call counts, just with cost fields `None` rather than being dropped —
+real usage is never hidden for lack of a current price.
+
+`/routing` gained a second section (metric-grid of call counts + a full
+usage table) built from the same aggregation, `app.py`'s `/routing` route
+now takes a `session` dependency it didn't need before. Verified live,
+not just via tests: ran a real `acr run` against Ollama (this machine's
+own `ACR_DEFAULT_MIN_QUALITY_TIER` opt-in routes there), confirmed the
+row landed in `data/acr.db` via a raw sqlite3 query, then hit a real
+"dashboard shows nothing" symptom that turned out to be the preview
+server's own Python process not having been restarted — template/static
+edits hot-reload in this dev setup, but a `app.py` route-function change
+doesn't, since that's compiled into the already-running process. Restarted
+the preview server and the real numbers (5 mock calls, 2 Ollama calls,
+real token counts) appeared correctly. No Claude/Anthropic usage shows
+yet simply because none has gone through ACR's own routing in this
+environment — the tracking is real and will show it the moment that
+changes; this session's own MCP conversation with Claude Code is a
+separate system from ACR's routing ladder, not a source this table draws
+from.
+
 Wiring this up for real (rather than leaving it as an untested code path)
 immediately surfaced a real, previously-invisible bug:
 `acr.providers.ollama.OllamaProvider` hardcoded `DEFAULT_MODEL =

@@ -102,6 +102,7 @@ from acr.telemetry.explain import TaskExplanation, explain_task
 from acr.telemetry.explain import TaskNotFoundError as TaskExplainNotFoundError
 from acr.telemetry.models import TelemetryEvent
 from acr.telemetry.recorder import TelemetryRecorder
+from acr.telemetry.usage import ProviderUsage, usage_by_provider
 from acr.tools.browser import BrowserNotInstalledError
 from acr.tools.default_tools import build_default_registry
 from acr.tools.exposure import expose_tools
@@ -504,6 +505,32 @@ def models_route(
         raise typer.Exit(code=1) from exc
     typer.echo(f"tried={','.join(routed.tried_profiles)} escalated={routed.escalated}")
     typer.echo(routed.result.text)
+
+
+@models_app.command("usage")
+def models_usage() -> None:
+    """Real per-provider call counts, tokens, and estimated cost, from
+    every recorded model.call.completed event -- cost uses each
+    provider's *current* cost_per_1k_tokens, not a historical price
+    catalog (there isn't one), applied to all-time usage."""
+    settings = get_settings()
+    router = build_default_router(settings)
+
+    async def _usage() -> list[ProviderUsage]:
+        async with session_scope(settings) as session:
+            return await usage_by_provider(session, router.profiles)
+
+    usage = asyncio.run(_usage())
+    if not usage:
+        typer.echo("no model calls recorded yet")
+        return
+    for u in usage:
+        cost = f"{u.estimated_cost:.4f}" if u.estimated_cost is not None else "unknown"
+        typer.echo(
+            f"{u.provider}\tcalls={u.call_count}\t"
+            f"input_tokens={u.input_tokens}\toutput_tokens={u.output_tokens}\t"
+            f"estimated_cost={cost}"
+        )
 
 
 @tools_app.command("list")

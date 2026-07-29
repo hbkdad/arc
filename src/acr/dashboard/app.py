@@ -35,6 +35,7 @@ from acr.learning.proposals import ProposalStatus, list_proposals
 from acr.routing.models import ModelProfile, build_default_router
 from acr.security.audit import recent_audit_events
 from acr.skills.registry import list_skills
+from acr.telemetry.usage import usage_by_provider
 from acr.tools.default_tools import build_default_registry
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -219,13 +220,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     @app.get("/routing", response_class=HTMLResponse)
-    async def routing(request: Request) -> HTMLResponse:
+    async def routing(
+        request: Request, session: AsyncSession = Depends(get_session)
+    ) -> HTMLResponse:
         router = build_default_router(settings)
         availability: list[tuple[ModelProfile, bool]] = [
             (profile, await profile.provider.is_available()) for profile in router.profiles
         ]
+        usage = await usage_by_provider(session, router.profiles)
         return templates.TemplateResponse(
-            request, "routing.html", {"active": "routing", "availability": availability}
+            request,
+            "routing.html",
+            {"active": "routing", "availability": availability, "usage": usage},
         )
 
     @app.get("/events", response_class=HTMLResponse)

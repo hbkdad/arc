@@ -99,7 +99,11 @@ async def run_task(
         session,
         "model.call.completed",
         task_id=task.id,
-        payload={"provider": provider.name, "output_tokens": result.output_tokens},
+        payload={
+            "provider": provider.name,
+            "input_tokens": result.input_tokens,
+            "output_tokens": result.output_tokens,
+        },
     )
 
     task.transition(TaskStatus.VERIFYING)

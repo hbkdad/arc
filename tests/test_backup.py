@@ -137,4 +137,43 @@ def test_restore_backup_rejects_a_zip_slip_path(tmp_path: Path) -> None:
     with pytest.raises(UnsafeArchiveMemberError):
         restore_backup(evil, target_dir)
 
+
+def test_restore_backup_rejects_an_absolute_path_manifest_entry(tmp_path: Path) -> None:
+    # A different escape shape than "../": pathlib's `/` operator discards
+    # the left operand entirely when the right operand looks like an
+    # absolute path (Path("safe") / "C:/evil" == Path("C:/evil"), not
+    # Path("safe/C:/evil")) -- a naive "join then check" implementation
+    # could construct a candidate outside target_dir without ever
+    # containing "..". _safe_target()'s is_relative_to() check happens
+    # *after* the join for exactly this reason.
+    data_dir = _seed_data_dir(tmp_path)
+    archive_path = tmp_path / "backup.zip"
+    create_backup(data_dir, archive_path)
+
+    evil_path = str(tmp_path / "outside-target.txt")
+    evil_content = b"absolute-path escape attempt"
+    evil = tmp_path / "evil-absolute.zip"
+    manifest = {
+        "acr_version": "0.0.0",
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "files": [
+            {
+                "path": evil_path,
+                "bytes": len(evil_content),
+                "sha256": hashlib.sha256(evil_content).hexdigest(),
+            }
+        ],
+    }
+    with zipfile.ZipFile(evil, "w") as zf:
+        zf.writestr(MANIFEST_NAME, json.dumps(manifest))
+
+    target_dir = tmp_path / "restore_target_2"
+    # _safe_target() is checked before zf.read() in restore_backup(), so
+    # this raises UnsafeArchiveMemberError even though the zip has no
+    # member under that name -- the path itself is refused first.
+    with pytest.raises(UnsafeArchiveMemberError):
+        restore_backup(evil, target_dir)
+
+    assert not (tmp_path / "outside-target.txt").exists()
+
     assert not (tmp_path / "evil.txt").exists()

@@ -18,6 +18,9 @@ from acr import __version__
 from acr.agents.factory import SpawnNotWorthwhileError, estimate_spawn, spawn_agent
 from acr.agents.models import AgentSpec, SpawnEstimate
 from acr.agents.planner import plan_agent
+from acr.agents.topology import (
+    DEFAULT_MIN_SAMPLES as DEFAULT_TOPOLOGY_MIN_SAMPLES,
+)
 from acr.agents.topology import TopologyRecommendation, recommend_topology
 from acr.backup import (
     BackupIntegrityError,
@@ -38,7 +41,7 @@ from acr.dashboard.app import create_app as create_dashboard_app
 from acr.db.base import session_scope
 from acr.db.migrate import upgrade_to_head
 from acr.doctor import CheckStatus, run_checks
-from acr.evaluation.calibration import CalibrationReport, compute_calibration
+from acr.evaluation.calibration import DEFAULT_MIN_USES, CalibrationReport, compute_calibration
 from acr.evaluation.evaluators import ExactMatchEvaluator
 from acr.evaluation.panel import PanelResult
 from acr.evaluation.regression import RegressionReport, detect_regression
@@ -49,7 +52,14 @@ from acr.evaluation.waste_analyzer import (
     find_duplicate_memories,
 )
 from acr.integrations.mcp_server import create_mcp_server
-from acr.learning.consolidation import GCPlan, apply_gc_plan, plan_gc
+from acr.learning.consolidation import (
+    DEFAULT_QUARANTINED_RETENTION_DAYS,
+    DEFAULT_STALE_CANDIDATE_DAYS,
+    DEFAULT_SUPERSEDED_RETENTION_DAYS,
+    GCPlan,
+    apply_gc_plan,
+    plan_gc,
+)
 from acr.learning.distillation import DistillationResult, TaskNotFoundError, distill_and_remember
 from acr.learning.failure_intelligence import SimilarFailure, find_similar_failures
 from acr.learning.promotion import PromotionReport, promote_candidates
@@ -65,9 +75,13 @@ from acr.learning.proposals import (
     propose_skill_evolution,
     reject_proposal,
 )
+from acr.learning.routing_optimization import (
+    DEFAULT_MIN_SAMPLES as DEFAULT_ROUTING_MIN_SAMPLES,
+)
 from acr.learning.routing_optimization import model_outcomes_for_task_class
 from acr.learning.self_practice import PracticeRun, run_self_practice
 from acr.learning.skill_generation import (
+    DEFAULT_MIN_REPEATS,
     RepeatedPattern,
     detect_repeated_successes,
     generate_candidate_skill,
@@ -833,7 +847,7 @@ def learn_promote(
 
 @learn_app.command("generate-skills")
 def learn_generate_skills(
-    min_repeats: int = typer.Option(3, "--min-repeats"),
+    min_repeats: int = typer.Option(DEFAULT_MIN_REPEATS, "--min-repeats"),
 ) -> None:
     """Generate quarantined candidate skills from repeated successful task objectives."""
     settings = get_settings()
@@ -1197,7 +1211,7 @@ def agents_spawn(
 @agents_app.command("topology")
 def agents_topology(
     task_class: str = typer.Argument(..., help="Task class to look up topology history for."),
-    min_samples: int = typer.Option(3, "--min-samples"),
+    min_samples: int = typer.Option(DEFAULT_TOPOLOGY_MIN_SAMPLES, "--min-samples"),
 ) -> None:
     """Recommend a worker count for a task class, if there's enough evidence."""
     settings = get_settings()
@@ -1349,7 +1363,9 @@ def improve_propose_routing_optimization(
     current_model: str = typer.Argument(..., help="The model currently preferred/reachable first."),
     candidate_model: str = typer.Argument(..., help="The model to compare it against."),
     min_samples: int = typer.Option(
-        3, "--min-samples", help="Minimum real recorded spawns per model to have an opinion."
+        DEFAULT_ROUTING_MIN_SAMPLES,
+        "--min-samples",
+        help="Minimum real recorded spawns per model to have an opinion.",
     ),
 ) -> None:
     """Compare real per-model outcomes for a task class (from `acr agents spawn`
@@ -1478,9 +1494,15 @@ def _echo_gc_plan(plan: GCPlan) -> None:
 
 @memory_app.command("gc-plan")
 def memory_gc_plan(
-    superseded_retention_days: int = typer.Option(30, "--superseded-retention-days"),
-    quarantined_retention_days: int = typer.Option(14, "--quarantined-retention-days"),
-    stale_candidate_days: int = typer.Option(60, "--stale-candidate-days"),
+    superseded_retention_days: int = typer.Option(
+        DEFAULT_SUPERSEDED_RETENTION_DAYS, "--superseded-retention-days"
+    ),
+    quarantined_retention_days: int = typer.Option(
+        DEFAULT_QUARANTINED_RETENTION_DAYS, "--quarantined-retention-days"
+    ),
+    stale_candidate_days: int = typer.Option(
+        DEFAULT_STALE_CANDIDATE_DAYS, "--stale-candidate-days"
+    ),
 ) -> None:
     """Dry run: show which memory records `memory gc-apply` would archive."""
     settings = get_settings()
@@ -1504,9 +1526,15 @@ def memory_gc_plan(
 
 @memory_app.command("gc-apply")
 def memory_gc_apply(
-    superseded_retention_days: int = typer.Option(30, "--superseded-retention-days"),
-    quarantined_retention_days: int = typer.Option(14, "--quarantined-retention-days"),
-    stale_candidate_days: int = typer.Option(60, "--stale-candidate-days"),
+    superseded_retention_days: int = typer.Option(
+        DEFAULT_SUPERSEDED_RETENTION_DAYS, "--superseded-retention-days"
+    ),
+    quarantined_retention_days: int = typer.Option(
+        DEFAULT_QUARANTINED_RETENTION_DAYS, "--quarantined-retention-days"
+    ),
+    stale_candidate_days: int = typer.Option(
+        DEFAULT_STALE_CANDIDATE_DAYS, "--stale-candidate-days"
+    ),
 ) -> None:
     """Recompute the GC plan and apply it -- archives every eligible record.
     CONFIRMED records are never eligible at any age; see `acr memory gc-plan`
@@ -1536,7 +1564,9 @@ def memory_gc_apply(
 @memory_app.command("calibration")
 def memory_calibration(
     min_uses: int = typer.Option(
-        1, "--min-uses", help="Minimum real recorded uses (successful+failed) to include a record."
+        DEFAULT_MIN_USES,
+        "--min-uses",
+        help="Minimum real recorded uses (successful+failed) to include a record.",
     ),
 ) -> None:
     """Does stored memory confidence actually predict outcomes? A fixed-bin

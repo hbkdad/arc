@@ -1076,12 +1076,22 @@ uv run acr skills evolve <id> [--description "..."]
 uv run acr skills compare-evolution <baseline-id> <candidate-id>
 uv run acr skills promote-evolution <baseline-id> <candidate-id>
 uv run acr skills rollback-evolution <active-id> <restore-id>
-uv run acr agents plan "objective" [--role X --token-budget N]  # AgentSpec via real routing + exposure
-uv run acr agents spawn "objective" [--force]               # estimate -> run_task() -> critic review
+uv run acr agents plan "objective" [--role X --token-budget N --task-class X]  # AgentSpec via real routing + exposure
+uv run acr agents spawn "objective" --task-class X [--force]  # required: closes the evidence loop -- see below
 uv run acr agents topology <task-class>                     # evidence-gated worker-count recommendation
+uv run acr explain <task-id>                 # replay a task's real telemetry trail, no narrative
+uv run acr learn failures "objective" [--task-class X --limit N]  # similar past FAILURE memories
+uv run acr learn self-practice [--limit N --min-quality-tier N]   # run each active skill's own applicability
+uv run acr memory gc-plan [--superseded/quarantined/stale-candidate-*-days N]  # dry run
+uv run acr memory gc-apply [same flags]      # re-plans and archives every eligible record
+uv run acr memory calibration [--min-uses N] # does stored confidence predict outcomes?
+uv run acr backup create [--output PATH]     # zip + SHA-256 manifest of the data dir
+uv run acr backup restore <archive> --target-dir PATH [--force]
+uv run acr models usage                      # real per-provider calls/tokens/estimated cost
 uv run acr dashboard serve [--host --port]   # dashboard + /visualization: http://127.0.0.1:8765
 uv run acr mcp serve [--transport stdio|sse|streamable-http] [--host --port]
 uv run acr improve propose-skill-evolution <baseline-id> <candidate-id>
+uv run acr improve propose-routing-optimization <task-class> <current-model> <candidate-model>
 uv run acr improve list [--status pending|approved|rejected|auto_applied]
 uv run acr improve approve <proposal-id>
 uv run acr improve reject <proposal-id>
@@ -1093,9 +1103,15 @@ uv run ruff format --check .
 uv run pyright
 ```
 
-Memory *writing* is still library-level only (`acr.memory.write_controller`,
-plus `acr.learning.distillation` as a real caller) — no
-`acr memory remember ...` CLI verb for arbitrary facts yet.
+`agents spawn --task-class` is required (not optional) as of 2026-07-29:
+it's how a spawn's outcome feeds back into skill reliability and topology
+evidence (`record_skill_outcome()`/`record_topology()` — see "Closing the
+evidence loop" above); ACR has no classifier to infer one safely.
+
+Memory *writing* for arbitrary facts is still library-level only
+(`acr.memory.write_controller`) — `remember_failure()`/`remember_decision()`
+exist as typed helpers (see `acr.memory.schemas`), but there's no
+`acr memory remember ...` CLI verb for them yet.
 
 ## Real provider routing (post-Phase-15 hardening)
 
@@ -1576,6 +1592,48 @@ initialized module mid-import. Fixed by deferring `self_practice.py`'s
 `agents.factory`/`agents.planner` imports to inside the function body —
 standard for this exact class of cycle, and harmless since both packages
 are fully loaded by the time the function actually runs.
+
+### Audit pass over the batch above (2026-07-29)
+
+A follow-up review of everything in "Next-level implementations" and the
+usage/cost tracking feature above, before considering either done:
+
+- **Confirmed correct, no change needed**: the MCP `run_task` tool's
+  `CREDENTIAL_USE` permission/audit gate is checked before the branch on
+  `task_class`, so the new evidence-recording path doesn't bypass it.
+  `proposals.py`'s `_apply()` for `ROUTING_OPTIMIZATION` is a genuine
+  no-op while `approve_proposal()` still records `status=APPROVED` and
+  audit-logs for both proposal kinds. `backup.py`'s `restore_backup()`
+  verifies every archive member's hash and path safety in a first pass
+  before any file is written in a second — never interleaved. A suspected
+  zip-slip variant via an absolute-path manifest entry (`pathlib`'s `/`
+  operator silently discards the left operand when the right looks
+  absolute, so a naive "join then check" could construct a path outside
+  `target_dir` without any `..`) turned out to already be caught, because
+  `_safe_target()`'s `is_relative_to()` check runs on the *joined result*,
+  not by string-inspecting the input — locked in with a new regression
+  test, `test_restore_backup_rejects_an_absolute_path_manifest_entry`.
+- **Fixed**: several CLI commands (`memory gc-plan`/`gc-apply`,
+  `memory calibration`, `learn generate-skills`, `agents topology`,
+  `improve propose-routing-optimization`) hardcoded literal default
+  values (`30`, `14`, `60`, `1`, `3`) that duplicated named constants
+  already defined in the modules they call
+  (`acr.learning.consolidation.DEFAULT_*`,
+  `acr.evaluation.calibration.DEFAULT_MIN_USES`,
+  `acr.learning.skill_generation.DEFAULT_MIN_REPEATS`,
+  `acr.agents.topology.DEFAULT_MIN_SAMPLES`,
+  `acr.learning.routing_optimization.DEFAULT_MIN_SAMPLES`). Harmless
+  today since the literals matched, but a real drift risk: changing a
+  module's own default wouldn't have changed what the CLI actually used
+  or displayed in `--help`. The CLI now imports and passes through the
+  real constants everywhere this pattern appeared.
+- **Reviewed, no change needed**: `self_practice.py`'s per-skill loop has
+  no `try`/`except` around each `spawn_agent()` call, but that's
+  consistent with `spawn_agent()`'s own contract — provider/task failures
+  are recorded as a failed outcome and returned, not raised (the same
+  property `factory.py`'s `_AlwaysFailsProvider` test already exercises
+  for `agents spawn`) — so the loop doesn't need its own handling to
+  avoid losing already-completed practice runs to one bad skill.
 
 ## What's left
 

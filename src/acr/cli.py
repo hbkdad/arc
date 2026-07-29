@@ -14,7 +14,6 @@ from pathlib import Path
 import typer
 
 from acr import __version__
-from acr.agents.critic import review_agent_task
 from acr.agents.factory import SpawnNotWorthwhileError, estimate_spawn, spawn_agent
 from acr.agents.models import AgentSpec, SpawnEstimate
 from acr.agents.planner import plan_agent
@@ -32,6 +31,7 @@ from acr.db.base import session_scope
 from acr.db.migrate import upgrade_to_head
 from acr.doctor import CheckStatus, run_checks
 from acr.evaluation.evaluators import ExactMatchEvaluator
+from acr.evaluation.panel import PanelResult
 from acr.evaluation.regression import RegressionReport, detect_regression
 from acr.evaluation.waste_analyzer import (
     DuplicateGroup,
@@ -943,13 +943,18 @@ def agents_plan(
     objective: str = typer.Argument(..., help="Objective to plan an agent for."),
     role: str = typer.Option("worker", "--role"),
     token_budget: int = typer.Option(4000, "--token-budget"),
+    task_class: str | None = typer.Option(
+        None, "--task-class", help="Improves routing precision; required by `agents spawn`."
+    ),
 ) -> None:
     """Build an AgentSpec for an objective, scoped by real skill/tool routing."""
     settings = get_settings()
 
     async def _plan() -> AgentSpec:
         async with session_scope(settings) as session:
-            return await plan_agent(session, objective, role=role, token_budget=token_budget)
+            return await plan_agent(
+                session, objective, role=role, token_budget=token_budget, task_class=task_class
+            )
 
     spec = asyncio.run(_plan())
     estimate = estimate_spawn(spec)
@@ -967,6 +972,13 @@ def agents_plan(
 @agents_app.command("spawn")
 def agents_spawn(
     objective: str = typer.Argument(..., help="Objective to plan and spawn an agent for."),
+    task_class: str = typer.Option(
+        ...,
+        "--task-class",
+        help="Task class this spawn belongs to -- routes skills more precisely and is "
+        "how its outcome feeds back into skill reliability and topology recommendations "
+        "(`acr agents topology <task-class>`). Required: ACR has no classifier to infer it.",
+    ),
     role: str = typer.Option("worker", "--role"),
     force: bool = typer.Option(
         False, "--force", help="Spawn even if the spawn estimate recommends against it."
@@ -975,21 +987,26 @@ def agents_spawn(
     """Plan an agent, then run it end to end via the task engine and review the result."""
     settings = get_settings()
 
-    async def _spawn() -> tuple[AgentSpec, SpawnEstimate, Task | None]:
+    async def _spawn() -> tuple[AgentSpec, SpawnEstimate, tuple[Task, PanelResult] | None]:
         async with session_scope(settings) as session:
-            spec = await plan_agent(session, objective, role=role)
+            spec = await plan_agent(session, objective, role=role, task_class=task_class)
             estimate = estimate_spawn(spec)
             try:
-                task = await spawn_agent(
-                    session, spec, MockProvider(), TelemetryRecorder(), force=force
+                result = await spawn_agent(
+                    session,
+                    spec,
+                    MockProvider(),
+                    TelemetryRecorder(),
+                    task_class=task_class,
+                    force=force,
                 )
             except SpawnNotWorthwhileError:
                 return spec, estimate, None
             await session.commit()
-            return spec, estimate, task
+            return spec, estimate, result
 
-    spec, estimate, task = asyncio.run(_spawn())
-    if task is None:
+    spec, estimate, result = asyncio.run(_spawn())
+    if result is None:
         typer.echo(
             f"not spawned: estimate does not justify it "
             f"(quality_gain={estimate.expected_quality_gain:.2f}, "
@@ -998,7 +1015,7 @@ def agents_spawn(
         )
         raise typer.Exit(code=1)
 
-    review = review_agent_task(task)
+    task, review = result
     typer.echo(f"{spec.id}: task {task.id} -> {task.status.value}")
     typer.echo(f"review: passed={review.passed} agreement={review.agreement:.2f}")
 

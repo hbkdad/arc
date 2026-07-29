@@ -26,11 +26,17 @@ async def plan_agent(
     *,
     role: str = "worker",
     token_budget: int = 4000,
+    task_class: str | None = None,
 ) -> AgentSpec:
     """Build a single-agent plan for `objective`, granting only the skills
     and tools the existing routers judge relevant — never the full registry
-    (the same task-specific-exposure principle Phase 6 established)."""
-    routed_skills = await route(session, objective)
+    (the same task-specific-exposure principle Phase 6 established).
+
+    `task_class`, when the caller has one (e.g. `agents spawn --task-class`),
+    is passed straight through to `route()` so an exact task_class match can
+    surface a skill even with zero keyword overlap against `objective` —
+    otherwise routing depends on keyword relevance alone."""
+    routed_skills = await route(session, objective, task_class=task_class)
     exposed_tools = expose_tools(build_default_registry(), objective)
 
     return AgentSpec(

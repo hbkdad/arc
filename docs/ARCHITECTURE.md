@@ -570,9 +570,9 @@ risk) exposes a `worth_spawning` property, and `spawn_agent()` refuses to
 run an objective whose estimate says no unless the caller passes
 `force=True` — spawning sub-agents has a real cost (context, tokens,
 coordination) that master principle #14 says must be justified, not
-assumed. `spawn_agent()` itself is a thin, honest wrapper: it calls the
-real `run_task()` (Phase 1) with the spec's provider and objective; no
-parallel "fake execution" path exists.
+assumed. `spawn_agent()` calls the real `run_task()` (Phase 1) with the
+spec's provider and objective — no parallel "fake execution" path exists
+— then records the real outcome (see "Closing the evidence loop" below).
 
 `acr.agents.planner.plan_agent()` builds an `AgentSpec` using the *real*
 Phase 4/6 machinery — `skills.routing.route()` for skill grants and
@@ -598,6 +598,44 @@ has at least `min_samples` (default 3) recorded runs meeting
 would be exactly the unevidenced claim master principle #22 forbids.
 Recommendations are per-`task_class`: evidence from `coding` runs never
 informs a `research` recommendation.
+
+### Closing the evidence loop (2026-07-29)
+
+`learning.utility.record_skill_outcome()` (Phase 8) and
+`agents.topology.record_topology()` (Phase 10) both existed as real,
+tested functions — but nothing in application code ever called either
+one. `spawn_agent()` ran a real task and returned it; the CLI reviewed it
+and printed the result; no code path fed that outcome back into skill
+reliability or topology evidence. `routing.route()`'s "check prior
+performance" step and `recommend_topology()`'s evidence requirement could
+therefore never see real data, no matter how many agents actually ran —
+this wasn't "not enough runs yet," it was that runs literally couldn't
+move either number.
+
+Fixed at the one choke point every caller shares: `spawn_agent()` now
+reviews its own task via `review_agent_task()`, calls
+`record_skill_outcome()` for every skill in the spec, and calls
+`record_topology()` for the spawn itself. `task_class` became a required
+keyword argument (threaded through `agents_plan`/`agents_spawn`'s new
+`--task-class` option) rather than inferred — ACR has no classifier model
+(`routing.route()`'s own note), so guessing one would silently
+misattribute evidence to the wrong class, worse than not recording at
+all. `spawn_agent()`'s return type changed from `Task` to
+`tuple[Task, PanelResult]` since the review is now computed once, inside
+the function that needs it, instead of redundantly by every caller.
+
+Verified with real dogfooding, not just tests: three real `acr agents
+spawn --task-class ui-audit` runs against genuinely different objectives.
+`acr agents topology ui-audit` went from "insufficient evidence" to a real
+recommendation ("3/3 successful runs (100%), mean quality 1.00") purely
+from those runs — no seeded/synthetic rows. `dashboard-ui-audit`'s
+reliability moved from `0.00`/0 uses to `1.00`/3 uses on the dashboard's
+own `/skills` page. Re-running the `ui-design-critique@v2` evolution
+comparison from the entry above with this real evidence in place produced
+an even more honest result: `reliability: 1.00 -> 0.00, ...
+recommend_promote=False: candidate is both less reliable and more
+expensive than baseline` — the baseline's reliability is no longer a
+default 0.0 two untested versions were tied on, it's now earned.
 
 ## Dashboard (Phase 11)
 
@@ -769,6 +807,32 @@ environment doesn't composite frames, so CSS transitions there never
 settle; confirmed the real cascade was correct throughout by forcing
 `transition: none` and re-reading, unrelated to the shorthand bug above
 and not an issue for an actually-rendering browser.)
+
+### Table sort and filter (2026-07-29)
+
+`static/tables.js` (vanilla JS, no dependency, consistent with
+`visualization.js`'s own "no charting library" scope decision) makes every
+table already rendered inside a `.table-wrap` sortable by clicking any
+`<th>` (numeric-aware via the existing `.num` class tables already use for
+right-aligned columns) and, for tables with 2+ data rows, adds a
+client-side text filter above it. One `<script>` tag in `base.html` — no
+per-template changes across the 9 pages with real tables, matching the
+`pill_class` filter's "one shared mapping, not eleven copies" precedent.
+Everything sorted/filtered is already fully rendered server-side; this
+only reorders/hides existing DOM rows, no additional request. Degrades
+safely if JS fails to load: `.sortable`/`data-sort` styling only applies
+once `tables.js` actually adds the class, so an unstyled, unsorted,
+unfiltered — but still fully readable — table is the fallback, not a
+broken one.
+
+Verified live in the browser, not just via the regression test asserting
+the script tag and asset are served: clicked a real `<th>` on `/security`
+and confirmed the underlying rows actually reordered (ascending, then
+descending, comparing DOM order before/after via `getComputedStyle`-
+adjacent row inspection rather than trusting the click alone); typed into
+the filter input on the same page and confirmed the correct row count
+stayed visible vs. hidden; confirmed zero filter boxes render on the
+`/proposals` empty-state page (0 data rows) where one would just be noise.
 
 ## Integrations: MCP server (Phase 13, first sub-slice)
 

@@ -547,10 +547,21 @@ def test_agents_plan_reports_spec_and_estimate(migrated_settings: Settings) -> N
 
 
 def test_agents_spawn_runs_end_to_end_with_force(migrated_settings: Settings) -> None:
-    result = runner.invoke(app, ["agents", "spawn", "say hello", "--force"])
+    result = runner.invoke(
+        app, ["agents", "spawn", "say hello", "--task-class", "greeting", "--force"]
+    )
     assert result.exit_code == 0
     assert "completed" in result.stdout
     assert "review: passed=True" in result.stdout
+
+
+def test_agents_spawn_requires_a_task_class(migrated_settings: Settings) -> None:
+    # No classifier exists to infer one -- guessing would silently
+    # misattribute the resulting skill-outcome/topology evidence. Typer
+    # exits 2 for a missing required option before any of our own code
+    # runs, so there's no application-level message to assert on here.
+    result = runner.invoke(app, ["agents", "spawn", "say hello", "--force"])
+    assert result.exit_code == 2
 
 
 def test_agents_spawn_without_force_may_decline_an_unscoped_objective(
@@ -559,7 +570,7 @@ def test_agents_spawn_without_force_may_decline_an_unscoped_objective(
     # An unscoped objective (no matching skills/tools) has a low quality
     # gain estimate and no overhead to offset it either — this just
     # verifies the command runs cleanly in both outcomes, not which one.
-    result = runner.invoke(app, ["agents", "spawn", "say hello"])
+    result = runner.invoke(app, ["agents", "spawn", "say hello", "--task-class", "greeting"])
     assert result.exit_code in (0, 1)
     if result.exit_code == 0:
         assert "review:" in result.stdout

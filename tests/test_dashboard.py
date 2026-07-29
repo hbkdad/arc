@@ -218,6 +218,22 @@ async def test_proposals_page_renders_with_none_yet(migrated_settings: Settings)
     assert "No proposals yet" in response.text
 
 
+async def test_tables_js_static_asset_is_served(migrated_settings: Settings) -> None:
+    response = _client(migrated_settings).get("/static/tables.js")
+
+    assert response.status_code == 200
+    assert "table-filter" in response.text
+
+
+async def test_overview_page_loads_the_table_sort_and_filter_script(
+    migrated_settings: Settings,
+) -> None:
+    response = _client(migrated_settings).get("/")
+
+    assert response.status_code == 200
+    assert '<script src="/static/tables.js"></script>' in response.text
+
+
 async def test_overview_page_offers_a_neo_cyber_theme_toggle(
     migrated_settings: Settings,
 ) -> None:

@@ -442,7 +442,11 @@ def models_route(
             CompletionRequest(prompt=prompt), min_quality_tier=min_quality_tier
         )
 
-    routed = asyncio.run(_route())
+    try:
+        routed = asyncio.run(_route())
+    except NoProviderAvailableError as exc:
+        typer.echo(f"no provider available: {exc}")
+        raise typer.Exit(code=1) from exc
     typer.echo(f"tried={','.join(routed.tried_profiles)} escalated={routed.escalated}")
     typer.echo(routed.result.text)
 

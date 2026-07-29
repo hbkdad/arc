@@ -238,6 +238,15 @@ def test_models_route_completes_via_mock(migrated_settings: Settings) -> None:
     assert "tried=" in result.stdout
 
 
+def test_models_route_reports_no_provider_available_cleanly(migrated_settings: Settings) -> None:
+    # Must exit(1) with a clean message like `run` does, not an unhandled
+    # NoProviderAvailableError traceback.
+    result = runner.invoke(app, ["models", "route", "hello there", "--min-quality-tier", "5"])
+
+    assert result.exit_code == 1
+    assert "no provider available" in result.stdout
+
+
 def test_tools_list_and_expose(migrated_settings: Settings) -> None:
     list_result = runner.invoke(app, ["tools", "list"])
     assert list_result.exit_code == 0

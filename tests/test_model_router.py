@@ -17,25 +17,36 @@ from acr.routing.models import (
 class _FakeProvider(ModelProvider):
     """A test double: fixed availability and a fixed reply, no network."""
 
-    def __init__(self, name: str, *, available: bool, reply: str) -> None:
+    def __init__(
+        self, name: str, *, available: bool, reply: str, fail_with: Exception | None = None
+    ) -> None:
         self.name = name
         self._available = available
         self._reply = reply
+        self._fail_with = fail_with
 
     async def is_available(self) -> bool:
         return self._available
 
     async def complete(self, request: CompletionRequest) -> CompletionResult:
+        if self._fail_with is not None:
+            raise self._fail_with
         return CompletionResult(
             text=self._reply, provider=self.name, model=self.name, input_tokens=1, output_tokens=1
         )
 
 
 def _profile(
-    name: str, *, available: bool, reply: str, tier: int, cost: float = 0.0
+    name: str,
+    *,
+    available: bool,
+    reply: str,
+    tier: int,
+    cost: float = 0.0,
+    fail_with: Exception | None = None,
 ) -> ModelProfile:
     return ModelProfile(
-        provider=_FakeProvider(name, available=available, reply=reply),
+        provider=_FakeProvider(name, available=available, reply=reply, fail_with=fail_with),
         name=name,
         cost_per_1k_tokens=cost,
         quality_tier=tier,
@@ -115,6 +126,48 @@ async def test_complete_with_escalation_returns_last_attempt_if_never_verified()
 async def test_complete_with_escalation_raises_when_nothing_available() -> None:
     router = ModelRouter([_profile("down", available=False, reply="x", tier=0)])
     with pytest.raises(NoProviderAvailableError):
+        await router.complete_with_escalation(CompletionRequest(prompt="hi"))
+
+
+async def test_complete_with_escalation_moves_on_when_a_candidate_completion_fails() -> None:
+    # is_available() only checks reachability -- a candidate can still fail
+    # once actually asked to complete (Ollama with no model pulled, a cloud
+    # provider timing out). The ladder must try the next candidate, not
+    # blow up the whole call.
+    router = ModelRouter(
+        [
+            _profile(
+                "flaky",
+                available=True,
+                reply="unreachable",
+                tier=0,
+                fail_with=RuntimeError("boom"),
+            ),
+            _profile("fallback", available=True, reply="fallback reply", tier=1, cost=1.0),
+        ]
+    )
+    routed = await router.complete_with_escalation(CompletionRequest(prompt="hi"))
+    assert routed.result.text == "fallback reply"
+    assert routed.tried_profiles == ["flaky", "fallback"]
+
+
+async def test_complete_with_escalation_raises_with_the_last_error_when_every_candidate_fails() -> (
+    None
+):
+    router = ModelRouter(
+        [
+            _profile("flaky-one", available=True, reply="x", tier=0, fail_with=RuntimeError("one")),
+            _profile(
+                "flaky-two",
+                available=True,
+                reply="x",
+                tier=1,
+                cost=1.0,
+                fail_with=RuntimeError("two"),
+            ),
+        ]
+    )
+    with pytest.raises(NoProviderAvailableError, match="two"):
         await router.complete_with_escalation(CompletionRequest(prompt="hi"))
 
 

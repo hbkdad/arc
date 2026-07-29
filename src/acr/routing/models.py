@@ -86,11 +86,22 @@ class ModelRouter:
 
         tried: list[str] = []
         last_result: CompletionResult | None = None
+        last_error: Exception | None = None
         for profile in candidates:
             if not await profile.provider.is_available():
                 continue
-            result = await profile.provider.complete(request)
             tried.append(profile.name)
+            try:
+                result = await profile.provider.complete(request)
+            except Exception as exc:
+                # is_available() only checks reachability, not that a
+                # completion will actually succeed (e.g. Ollama has no model
+                # pulled, a cloud provider times out or 5xxs) -- an
+                # escalation ladder that aborts on the first such failure
+                # defeats its own purpose, so treat it the same as an
+                # unavailable candidate and move on.
+                last_error = exc
+                continue
             last_result = result
             if verify is None or verify(result):
                 return RoutedCompletion(
@@ -98,6 +109,10 @@ class ModelRouter:
                 )
 
         if last_result is None:
+            if last_error is not None:
+                raise NoProviderAvailableError(
+                    f"no configured provider completed successfully: {last_error}"
+                ) from last_error
             raise NoProviderAvailableError("no configured provider is available")
         return RoutedCompletion(result=last_result, tried_profiles=tried, escalated=len(tried) > 1)
 

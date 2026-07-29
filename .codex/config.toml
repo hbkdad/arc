@@ -1,0 +1,17 @@
+# Project-scoped MCP server registration for OpenAI's Codex CLI (the
+# `codex` command). Mirrors ../.mcp.json, which does the same for Claude
+# Code -- same server, same stdio launch command, different client's
+# config format.
+#
+# Verified against a real installed `codex-cli` (0.137.0), not assumed
+# from docs alone: Codex only loads a project-local `.codex/config.toml`
+# for a project marked "trusted" in the user's own global
+# `~/.codex/config.toml` (`[projects."<path>"] trust_level = "trusted"`).
+# That trust decision is the user's to make -- same as Claude Code's own
+# first-open approval prompt -- so this repo does not attempt to grant
+# itself trust. Until this project is trusted, Codex silently ignores
+# this file (confirmed: `codex mcp list` run from this repo does not show
+# `acr` registered without that trust entry).
+[mcp_servers.acr]
+command = "uv"
+args = ["run", "acr", "mcp", "serve"]

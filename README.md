@@ -49,12 +49,17 @@ acr mcp serve                # MCP server (stdio by default)
 ```
 (prefix with `uv run` if working from a source checkout instead of a `pip`/`uv tool` install)
 
-### Using ACR from Claude Code
+### Using ACR from Claude Code or Codex CLI
 
-This repo ships a project-scoped [`.mcp.json`](.mcp.json), so opening it
-in Claude Code offers ACR's memory/skill/web/GitHub search tools and task
-execution as MCP tools directly — approve the prompt the first time it
-asks, then they're available every session.
+This repo ships project-scoped MCP server registration for both
+[Claude Code](.mcp.json) and [Codex CLI](.codex/config.toml), so opening
+it in either offers ACR's memory/skill/web/GitHub search tools and task
+execution as MCP tools directly. Claude Code prompts for approval the
+first time it opens the project; Codex CLI only loads project-scoped
+config for a project you've marked trusted (`codex` trust prompt, or
+`trust_level = "trusted"` under `[projects."<path>"]` in your own
+`~/.codex/config.toml`) — either way, cloning the repo can't silently
+launch anything without you consenting.
 
 ## Development
 

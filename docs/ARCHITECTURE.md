@@ -1002,17 +1002,35 @@ just locally simulated) before this was written up.
 `.mcp.json` at the repo root is a project-scoped MCP server registration
 for Claude Code specifically — `acr mcp serve` over stdio, no arguments,
 matching the format Claude Code's own current documentation specifies
-(`mcpServers.<name>.{type,command,args}`; verified rather than guessed,
-unlike the Codex-side gap noted above). Deliberately has **no** hardcoded
-absolute path in `args` — a public repo's `.mcp.json` travels with every
-clone, and Claude Code spawns the server with its working directory set
-to wherever the project actually is, so hardcoding this machine's path
-would silently break for anyone else. Claude Code prompts for approval
-the first time a project with a `.mcp.json` opens (`⏸ Pending approval`
-until then), so committing this file can't make a clone launch anything
-without the person opening it explicitly consenting. Manually verified
-the exact spawned command (`uv run acr mcp serve` under stdio, EOF on
-stdin) starts and exits cleanly before committing.
+(`mcpServers.<name>.{type,command,args}`; verified rather than guessed).
+Deliberately has **no** hardcoded absolute path in `args` — a public
+repo's `.mcp.json` travels with every clone, and Claude Code spawns the
+server with its working directory set to wherever the project actually
+is, so hardcoding this machine's path would silently break for anyone
+else. Claude Code prompts for approval the first time a project with a
+`.mcp.json` opens (`⏸ Pending approval` until then), so committing this
+file can't make a clone launch anything without the person opening it
+explicitly consenting. Manually verified the exact spawned command
+(`uv run acr mcp serve` under stdio, EOF on stdin) starts and exits
+cleanly before committing.
+
+## Codex CLI integration
+
+`.codex/config.toml` at the repo root does the same job as `.mcp.json`
+above, for OpenAI's Codex CLI (`codex`) — `[mcp_servers.acr]` with the
+identical `uv run acr mcp serve` stdio launch. Verified against a real
+installed `codex-cli` (0.137.0), not assumed from docs: secondary sources
+disagreed on whether Codex even supports project-scoped MCP config at
+all (an open upstream feature request appeared to ask for exactly this),
+so this was checked directly rather than trusted. It does — but only for
+a project the user has explicitly marked `trust_level = "trusted"` in
+their own global `~/.codex/config.toml`; confirmed by creating this file
+and running `codex mcp list` from the repo, which did not show `acr`
+registered until that trust entry was added. That trust decision governs
+more than MCP loading (it affects Codex's sandbox/approval defaults for
+the whole project), so this repo does not attempt to grant itself trust —
+same boundary as Claude Code's own first-open approval prompt, just
+configured on the user's machine instead of interactively per-session.
 
 ## PyPI packaging: live
 
@@ -1108,14 +1126,13 @@ deferred gaps, each with a reason rather than an oversight:
 - ~~PyPI package / "downloads"~~ (Phase 14) — **done.**
   [`acr-runtime`](https://pypi.org/project/acr-runtime/) is live as of
   `v0.1.0` (2026-07-29) — see "PyPI packaging: live" above.
-- **Bespoke Claude Code / Codex MCP client config** (Phase 13) — half
-  done. `.mcp.json` at the repo root registers `acr mcp serve` as a
-  project-scoped MCP server for Claude Code specifically (format
-  verified against current documentation, not guessed — see "Claude Code
-  integration" below); Claude Code prompts for approval the first time a
-  project opens with it, so cloning the repo can't silently launch
-  anything. Codex's equivalent config format is still unverified and
-  intentionally not built.
+- ~~Bespoke Claude Code / Codex MCP client config~~ (Phase 13) — **done.**
+  `.mcp.json` (Claude Code) and `.codex/config.toml` (Codex CLI) both
+  register `acr mcp serve` as a project-scoped MCP server, both formats
+  verified against real client behavior, not guessed — see "Claude Code
+  integration" and "Codex CLI integration" above. Both clients gate
+  project-scoped config behind the user's own explicit trust/approval,
+  so cloning the repo can't silently launch anything either way.
 - **Additional self-improvement proposal kinds** (Phase 15) — "strategy
   optimization," "routing optimization," and a general "experiments"
   runner all need their own evidence sources before they could honestly

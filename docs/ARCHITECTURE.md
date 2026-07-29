@@ -916,6 +916,68 @@ running Ollama daemon (`qwen2.5-coder:1.5b`, `llama3.1:8b` actually
 pulled) — `acr run "..." --min-quality-tier 1` now genuinely completes via
 a local model, not just in theory.
 
+`Settings.default_min_quality_tier` (`ACR_DEFAULT_MIN_QUALITY_TIER`) is a
+persistent opt-in on top of the above: set it once and every `acr run`/MCP
+`run_task` call that doesn't explicitly pass `--min-quality-tier`/
+`min_quality_tier` uses it from then on, instead of needing the flag on
+every invocation. The zero-config out-of-box default (tier `0`, mock-only)
+is unchanged — this only affects a caller who's deliberately configured a
+preference.
+
+### Code-review hardening pass (2026-07-29)
+
+A systematic review pass (three independent reviewers, one per subsystem
+area) found and fixed several real, previously-untested issues — not
+found by manually stepping through a milestone, but by dedicated review:
+
+- **SSRF**: `web_fetch`/`browser_fetch` validated the URL scheme but never
+  the host, and both take a caller-supplied URL an MCP client (a more
+  untrusted caller than the local CLI) controls directly. Now blocks
+  link-local/multicast/reserved addresses (the cloud-metadata SSRF class)
+  unconditionally, re-validated on every redirect hop — deliberately does
+  *not* block ordinary loopback/private ranges, since reaching a user's
+  own local services (Ollama, a dev server under test) is legitimate,
+  expected local-first usage.
+- **Relevance ranking**: SQLite FTS5's `bm25()` is `<=0` and grows *more
+  negative* (not more positive) with match strength/corpus size; both
+  `memory.retrieval` and `skills.routing` assumed the opposite
+  (`1/(1+rank)`), which silently went negative once a table held a few
+  hundred rows — in `skills.routing` this clipped `applicability` to 0 and
+  dropped a genuinely relevant skill from routing candidacy entirely, a
+  bug that got worse the longer ACR ran. Fixed with a shared, sign-correct
+  `core.fts_query.bm25_to_relevance()`.
+- **Model escalation ladder**: `complete_with_escalation()` only guarded
+  `is_available()`, not the actual `complete()` call — a mid-ladder
+  failure (Ollama with no model pulled, a cloud provider timing out) blew
+  up the whole call instead of falling through to the next candidate,
+  defeating the ladder's purpose. Now tolerates a per-candidate failure
+  and keeps trying.
+- **Memory trust**: a low-confidence correction (`SUPERSEDE_EXISTING`)
+  always became `CONFIRMED` status with no confidence check, unlike a
+  brand-new fact (which needs `confidence >= 0.75`) — a weakly-evidenced
+  correction could become the trusted, temporally-current value for its
+  subject without earning that trust level.
+- **spawn_agent's cost/risk gate**: documented as something `spawn_agent()`
+  itself enforces, but the check only lived in the CLI's `agents spawn`
+  command; `spawn_agent()` ran unconditionally. Moved the enforcement into
+  the function itself (`SpawnNotWorthwhileError`, `force=True` to
+  override) so a future caller can't silently bypass it.
+- Smaller consistency fixes: `openai_compatible.py` hard-indexed its
+  response body where `anthropic_compatible.py` already parsed
+  defensively; `acr improve list --status`/dashboard `/proposals?status=`
+  crashed on an invalid value instead of a clean validation error;
+  dashboard `/tools` built its invocation list from an event-type-agnostic
+  query filtered *after* limiting, letting non-audit telemetry crowd out
+  real tool invocations; `security.secrets.redact_mapping()` didn't
+  recurse into a list nested inside a list.
+
+Also closed real test-coverage gaps found alongside this (90% → 95%
+overall): `anthropic_compatible.py`/`openai_compatible.py` had zero
+coverage on their actual request/response handling (only the no-API-key
+short-circuit was tested), and `doctor.py`/`github_search.py`/
+`browser.py` had untested error-handling branches — the same shape of gap
+that hid the Ollama hardcoded-model bug above.
+
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs on every push to `main` and every PR:
@@ -1064,16 +1126,14 @@ deferred gaps, each with a reason rather than an oversight:
   not a redesign.
 - **Real Ollama/cloud provider usage by default** — fixed to be reachable
   (see "Real provider routing" above: `--min-quality-tier`/`min_quality_tier`
-  now actually route there), but `0`/mock stays the *default* deliberately
-  — a fresh install shouldn't silently start making paid API calls or
-  depend on a local daemon being up. Still a real gap if the goal is
-  "just works with whatever's configured" rather than "opt-in."
+  now actually route there) and `Settings.default_min_quality_tier` makes
+  a raised tier sticky without needing the flag every call, but `0`/mock
+  stays the *out-of-box* default deliberately — a fresh install shouldn't
+  silently start making paid API calls or depend on a local daemon being
+  up. Still a real gap if the goal is "just works with whatever's
+  configured, no settings" rather than "one-time opt-in."
 - **CI** — done: `.github/workflows/ci.yml` (see "Continuous integration"
   above).
-- **PyPI packaging groundwork** — not started. Needed for the "individual
-  developers" go-to-market audience to get `pip install acr`/`uvx acr`
-  instead of clone + `uv sync`; actually publishing needs a PyPI
-  account/token from the user.
 
 None of the above are "next up" in a committed sequence — they're each a
 real, scoped decision waiting on the user (credentials, an account, a

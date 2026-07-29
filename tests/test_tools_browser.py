@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 import pytest
 
 from acr.tools.browser import BrowserNotInstalledError, _browser_fetch_handler
-from acr.tools.web_fetch import InvalidUrlError
+from acr.tools.web_fetch import InvalidUrlError, UnsafeUrlError
 
 
 async def _fetch_or_skip(url: str, **kwargs: object) -> dict:
@@ -44,6 +44,14 @@ async def test_browser_fetch_raises_for_a_non_http_scheme() -> None:
         await _browser_fetch_handler(None, "file:///etc/passwd")  # type: ignore[arg-type]
 
 
+async def test_browser_fetch_refuses_the_cloud_metadata_address() -> None:
+    # Same host-safety check as web_fetch, applied before any real
+    # Playwright/network activity happens -- a literal IP, so this doesn't
+    # touch real DNS/network.
+    with pytest.raises(UnsafeUrlError, match=r"169.254.169.254"):
+        await _browser_fetch_handler(None, "http://169.254.169.254/latest/meta-data/")  # type: ignore[arg-type]
+
+
 async def test_browser_fetch_translates_missing_executable_into_a_clear_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -67,8 +75,12 @@ async def test_browser_fetch_translates_missing_executable_into_a_clear_error(
 
     monkeypatch.setattr(playwright_async_api, "async_playwright", _fake_async_playwright)
 
+    # 127.0.0.1 (not example.invalid): the URL now passes a real host-safety
+    # check (`_assert_safe_host`, DNS resolution included) before the fake
+    # Playwright ever runs, so it must resolve -- loopback is deliberately
+    # not blocked (see UnsafeUrlError's docstring).
     with pytest.raises(BrowserNotInstalledError, match="playwright install chromium"):
-        await _browser_fetch_handler(None, "http://example.invalid/")  # type: ignore[arg-type]
+        await _browser_fetch_handler(None, "http://127.0.0.1:1/")  # type: ignore[arg-type]
 
 
 async def test_browser_fetch_reraises_other_playwright_errors_unchanged(
@@ -91,4 +103,4 @@ async def test_browser_fetch_reraises_other_playwright_errors_unchanged(
     monkeypatch.setattr(playwright_async_api, "async_playwright", _fake_async_playwright)
 
     with pytest.raises(PlaywrightError, match="unrelated navigation failure"):
-        await _browser_fetch_handler(None, "http://example.invalid/")  # type: ignore[arg-type]
+        await _browser_fetch_handler(None, "http://127.0.0.1:1/")  # type: ignore[arg-type]

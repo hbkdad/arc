@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from acr.security.injection import scan_for_injection
 from acr.tools.models import SideEffectLevel, ToolSpec
-from acr.tools.web_fetch import _ALLOWED_SCHEMES, InvalidUrlError
+from acr.tools.web_fetch import _ALLOWED_SCHEMES, InvalidUrlError, UnsafeUrlError, _assert_safe_host
 
 _NAVIGATION_TIMEOUT_MS = 15_000
 
@@ -40,17 +40,36 @@ async def _browser_fetch_handler(
 ) -> dict[str, Any]:
     import httpx
     from playwright.async_api import Error as PlaywrightError
-    from playwright.async_api import async_playwright
+    from playwright.async_api import Route, async_playwright
 
     scheme = httpx.URL(url).scheme
     if scheme not in _ALLOWED_SCHEMES:
         raise InvalidUrlError(f"unsupported URL scheme: {scheme!r}")
+    await _assert_safe_host(httpx.URL(url).host)
+
+    async def _block_unsafe_requests(route: Route) -> None:
+        # Defense-in-depth against a server-side redirect (or a page's own
+        # sub-resource fetch) bouncing this navigation to a link-local/
+        # metadata address after the initial URL already passed the check
+        # above -- same concern as web_fetch's httpx event hook, adapted to
+        # Playwright's per-request routing API.
+        request_url = httpx.URL(route.request.url)
+        if request_url.scheme not in _ALLOWED_SCHEMES:
+            await route.abort()
+            return
+        try:
+            await _assert_safe_host(request_url.host)
+        except UnsafeUrlError:
+            await route.abort()
+            return
+        await route.continue_()
 
     try:
         async with async_playwright() as p:
             browser = await p.chromium.launch()
             try:
                 page = await browser.new_page()
+                await page.route("**/*", _block_unsafe_requests)
                 response = await page.goto(url, timeout=_NAVIGATION_TIMEOUT_MS)
                 title = await page.title()
                 full_text = await page.inner_text("body")

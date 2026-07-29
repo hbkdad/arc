@@ -952,12 +952,14 @@ without the person opening it explicitly consenting. Manually verified
 the exact spawned command (`uv run acr mcp serve` under stdio, EOF on
 stdin) starts and exits cleanly before committing.
 
-## PyPI packaging groundwork
+## PyPI packaging: live
 
-The package now builds and actually works standalone, verified rather
-than assumed. Not live on PyPI yet — the publish workflow exists and is
-wired for Trusted Publishing, but the triggering GitHub Release hasn't
-been created (a distinct, explicit action — see "Publishing" below).
+**[`acr-runtime`](https://pypi.org/project/acr-runtime/) is published on
+PyPI as of `v0.1.0`** — `pip install acr-runtime` genuinely works; verified
+by installing the real published artifact (not a local build) into a
+throwaway venv and running `acr version`/`acr db upgrade`/`acr run`
+end-to-end against it, same as every other verification this project has
+insisted on rather than just asserting.
 
 - **Distribution name is `acr-runtime`, not `acr`.** Checked PyPI before
   assuming the obvious name was free: `acr` is taken (an unrelated,
@@ -1011,8 +1013,9 @@ token — even one pasted into a GitHub secret rather than given directly
 to the assistant — isn't something this session does under any
 circumstance. Trusted Publishing needs no token to ever exist.
 
-One-time setup only the user can do (needs their PyPI login): on
-pypi.org, Account Settings → Publishing → add a pending publisher, with:
+One-time setup the user did directly (needed their PyPI login, this
+session couldn't do it): on pypi.org, Account Settings → Publishing →
+added a pending publisher for:
 
 | Field | Value |
 |---|---|
@@ -1022,11 +1025,13 @@ pypi.org, Account Settings → Publishing → add a pending publisher, with:
 | Workflow filename | `publish.yml` |
 | Environment name | `pypi` |
 
-After that, creating a GitHub Release (tag `v0.1.0` or similar) triggers
-the actual publish — a real, irreversible, public action (a given
-version can never be re-uploaded to PyPI once published), so this
-session asks before creating one rather than doing it as a side effect
-of packaging work.
+**`v0.1.0` was tagged and released on 2026-07-29**, with the user's
+explicit go-ahead (a real, irreversible, public action — a given version
+can never be re-uploaded to PyPI once published, so this wasn't done as
+an automatic side effect of packaging work). `publish.yml` ran clean —
+build, OIDC exchange, upload, attestation generation — and the package
+went live in under a minute. Verified against the real, live PyPI
+package afterward, not just the workflow's own "success" status.
 
 ## What's left
 
@@ -1038,13 +1043,9 @@ deferred gaps, each with a reason rather than an oversight:
 - **Desktop app** (Phase 13, Tauri) — deliberately deferred per explicit
   user decision; large enough to deserve its own scoping conversation
   (target platforms, UI approach) whenever it's picked up.
-- **PyPI package / "downloads"** (Phase 14) — packaging groundwork done
-  and verified working (build + install + run end-to-end in an isolated
-  environment), Trusted Publishing workflow ready — see "PyPI packaging
-  groundwork" above. Two things only the user can do: configure the
-  pending publisher on pypi.org (needs their login), and approve creating
-  the actual GitHub Release that triggers the first publish (irreversible
-  once live).
+- ~~PyPI package / "downloads"~~ (Phase 14) — **done.**
+  [`acr-runtime`](https://pypi.org/project/acr-runtime/) is live as of
+  `v0.1.0` (2026-07-29) — see "PyPI packaging: live" above.
 - **Bespoke Claude Code / Codex MCP client config** (Phase 13) — half
   done. `.mcp.json` at the repo root registers `acr mcp serve` as a
   project-scoped MCP server for Claude Code specifically (format

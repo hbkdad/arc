@@ -1,6 +1,7 @@
 # ACR — Adaptive Cognitive Runtime
 
 [![CI](https://github.com/hbkdad/arc/actions/workflows/ci.yml/badge.svg)](https://github.com/hbkdad/arc/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/acr-runtime.svg)](https://pypi.org/project/acr-runtime/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 Local-first, model-independent AI orchestration and cognitive runtime.
@@ -24,6 +25,16 @@ what's implemented, how, and why.
 
 ## Quick start
 
+Install from PyPI:
+
+```bash
+pip install acr-runtime   # or: uv tool install acr-runtime
+acr db upgrade            # create the local SQLite schema, no repo checkout needed
+acr doctor
+```
+
+Or from a source checkout (for development — see [`CONTRIBUTING.md`](CONTRIBUTING.md)):
+
 ```bash
 uv sync                 # install deps + local package into .venv
 cp .env.example .env    # local dev data dir (repo-local ./data, gitignored)
@@ -32,10 +43,11 @@ uv run acr doctor
 ```
 
 ```bash
-uv run acr run "say hello"          # create + execute a task end to end
-uv run acr dashboard serve          # operational dashboard: http://127.0.0.1:8765
-uv run acr mcp serve                # MCP server (stdio by default)
+acr run "say hello"          # create + execute a task end to end
+acr dashboard serve          # operational dashboard: http://127.0.0.1:8765
+acr mcp serve                # MCP server (stdio by default)
 ```
+(prefix with `uv run` if working from a source checkout instead of a `pip`/`uv tool` install)
 
 ### Using ACR from Claude Code
 

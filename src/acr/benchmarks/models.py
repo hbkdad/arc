@@ -53,7 +53,7 @@ class BenchmarkRun(Base):
 
     id: Mapped[str] = mapped_column(primary_key=True, default=_new_id)
     suite_name: Mapped[str]
-    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow, index=True)
     total_cases: Mapped[int]
     passed_cases: Mapped[int]
     score: Mapped[float]

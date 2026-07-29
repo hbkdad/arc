@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+from sqlalchemy import event
+from sqlalchemy.engine.interfaces import DBAPIConnection
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -12,6 +14,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.pool import ConnectionPoolEntry
 
 from acr.config import Settings
 
@@ -20,10 +23,30 @@ class Base(DeclarativeBase):
     """Base class for all ACR ORM models."""
 
 
+def _set_sqlite_pragmas(
+    dbapi_connection: DBAPIConnection, _connection_record: ConnectionPoolEntry
+) -> None:
+    """WAL mode lets the dashboard's read-only polling (every 2s, `/api/graph`)
+    proceed while `acr run` holds a write transaction open for the duration
+    of a real (non-mock) model call -- SQLite's default rollback-journal mode
+    takes an exclusive lock for that whole span, so a poll landing during a
+    slow completion hits `database is locked` past the default 5s busy
+    timeout. This is the first real multi-process contention ACR sees, not a
+    data-volume problem. A generous busy_timeout is the second half of the
+    fix: still fails eventually if something is actually stuck, but survives
+    an ordinary slow completion instead of a bare 5s default."""
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA busy_timeout=30000")
+    cursor.close()
+
+
 def make_engine(settings: Settings) -> AsyncEngine:
     """Create an async engine, ensuring the local data directory exists first."""
     settings.ensure_data_dir()
-    return create_async_engine(settings.database_url, future=True)
+    engine = create_async_engine(settings.database_url, future=True)
+    event.listens_for(engine.sync_engine, "connect")(_set_sqlite_pragmas)
+    return engine
 
 
 def make_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:

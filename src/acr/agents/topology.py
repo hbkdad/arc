@@ -44,7 +44,7 @@ class AgentTopologyRecord(Base):
     latency_ms: Mapped[int] = mapped_column(default=0)
     quality_score: Mapped[float] = mapped_column(default=0.0)
     succeeded: Mapped[bool] = mapped_column(default=True)
-    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow, index=True)
 
 
 async def record_topology(

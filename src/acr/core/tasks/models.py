@@ -75,7 +75,7 @@ class Task(Base):
     status: Mapped[TaskStatus] = mapped_column(
         SAEnum(TaskStatus), default=TaskStatus.CREATED, index=True
     )
-    created_at: Mapped[datetime] = mapped_column(default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(default=_utcnow, index=True)
     updated_at: Mapped[datetime] = mapped_column(default=_utcnow, onupdate=_utcnow)
 
     runs: Mapped[list[TaskRun]] = relationship(back_populates="task", cascade="all, delete-orphan")

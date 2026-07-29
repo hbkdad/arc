@@ -97,7 +97,7 @@ class MemoryRecord(Base):
     evidence: Mapped[str | None] = mapped_column(default=None)
 
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow, index=True)
     observed_at: Mapped[datetime] = mapped_column(default=utcnow)
     valid_from: Mapped[datetime] = mapped_column(default=utcnow)
     valid_until: Mapped[datetime | None] = mapped_column(default=None)

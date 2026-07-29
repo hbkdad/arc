@@ -17,6 +17,7 @@ build step" and ACR's local-first/offline-usable requirement).
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -47,7 +48,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     session_factory = make_session_factory(engine)
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
-    app = FastAPI(title="ACR Dashboard")
+    @asynccontextmanager
+    async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+        yield
+        # Mirrors the CLI's session_scope(), which always disposes its
+        # engine in a finally -- `acr dashboard serve` runs long enough
+        # that this rarely matters in practice, but a test/embedding
+        # context that creates many apps (or a graceful-shutdown path)
+        # shouldn't leak connection-pool resources.
+        await engine.dispose()
+
+    app = FastAPI(title="ACR Dashboard", lifespan=_lifespan)
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
     async def get_session() -> AsyncIterator[AsyncSession]:
@@ -119,13 +130,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/tools", response_class=HTMLResponse)
     async def tools(request: Request, session: AsyncSession = Depends(get_session)) -> HTMLResponse:
         registry = build_default_registry()
+        # recent_audit_events() filters to security.audit at the SQL level
+        # before applying its own limit -- filtering event_type in Python
+        # *after* an event-type-agnostic `recent_events(limit=100)` (the
+        # previous approach here) let a burst of non-audit telemetry (task
+        # lifecycle, context.attribution, ...) crowd real tool invocations
+        # out of the window entirely.
         invocations = [
             e
-            for e in await queries.recent_events(session, limit=100)
-            if e.event_type == "security.audit"
-        ]
-        invocations = [
-            e for e in invocations if str(e.payload.get("action", "")).startswith("tool.invoke:")
+            for e in await recent_audit_events(session, limit=100)
+            if str(e.payload.get("action", "")).startswith("tool.invoke:")
         ]
         return templates.TemplateResponse(
             request,
@@ -188,10 +202,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def proposals(
         request: Request,
         session: AsyncSession = Depends(get_session),
-        status: str | None = None,
+        status: ProposalStatus | None = None,
     ) -> HTMLResponse:
-        parsed_status = ProposalStatus(status) if status else None
-        rows = await list_proposals(session, status=parsed_status)
+        # FastAPI/pydantic validate `status` against the enum itself and
+        # return a clean 422 for a bad value -- matching `improve_list`'s
+        # equivalent CLI option, rather than letting `ProposalStatus(status)`
+        # raise an unhandled ValueError here.
+        rows = await list_proposals(session, status=status)
         return templates.TemplateResponse(
             request,
             "proposals.html",

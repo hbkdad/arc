@@ -44,21 +44,19 @@ def contains_secret(text: str) -> bool:
     return any(pattern.search(text) for _name, pattern in _PATTERNS)
 
 
+def _redact_value(value: object) -> object:
+    if isinstance(value, str):
+        return redact_secrets(value)
+    if isinstance(value, dict):
+        return redact_mapping(value)
+    if isinstance(value, list):
+        # Recurse rather than special-casing str/dict items only -- a list
+        # nested inside a list (valid JSON, and telemetry payloads are
+        # JSON-like) must still be walked, not passed through unredacted.
+        return [_redact_value(item) for item in value]
+    return value
+
+
 def redact_mapping(payload: dict[str, object]) -> dict[str, object]:
     """Recursively redact string values in a JSON-like dict (telemetry payloads)."""
-    result: dict[str, object] = {}
-    for key, value in payload.items():
-        if isinstance(value, str):
-            result[key] = redact_secrets(value)
-        elif isinstance(value, dict):
-            result[key] = redact_mapping(value)
-        elif isinstance(value, list):
-            result[key] = [
-                redact_secrets(item)
-                if isinstance(item, str)
-                else (redact_mapping(item) if isinstance(item, dict) else item)
-                for item in value
-            ]
-        else:
-            result[key] = value
-    return result
+    return {key: _redact_value(value) for key, value in payload.items()}

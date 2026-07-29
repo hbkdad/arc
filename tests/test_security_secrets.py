@@ -59,3 +59,16 @@ def test_redact_mapping_recurses_through_nested_structures() -> None:
     items = redacted["items"]
     assert isinstance(items, list)
     assert "AKIA1234567890ABCDEF" not in items[1]
+
+
+def test_redact_mapping_recurses_into_a_list_nested_inside_a_list() -> None:
+    payload: dict[str, object] = {"outer": ["fine", ["AKIA1234567890ABCDEF", "also fine"]]}
+
+    redacted = redact_mapping(payload)
+
+    outer = redacted["outer"]
+    assert isinstance(outer, list)
+    inner = outer[1]
+    assert isinstance(inner, list)
+    assert "AKIA1234567890ABCDEF" not in inner[0]
+    assert inner[1] == "also fine"

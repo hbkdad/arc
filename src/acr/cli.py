@@ -1109,17 +1109,14 @@ def improve_propose_skill_evolution(
 
 @improve_app.command("list")
 def improve_list(
-    status: str | None = typer.Option(
-        None, "--status", help="pending|approved|rejected|auto_applied"
-    ),
+    status: ProposalStatus | None = typer.Option(None, "--status", help="Filter by status."),
 ) -> None:
     """List self-improvement proposals."""
     settings = get_settings()
-    parsed_status = ProposalStatus(status) if status else None
 
     async def _list() -> list[Proposal]:
         async with session_scope(settings) as session:
-            return await list_proposals(session, status=parsed_status)
+            return await list_proposals(session, status=status)
 
     proposals = asyncio.run(_list())
     if not proposals:

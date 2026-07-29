@@ -1021,6 +1021,57 @@ deterministically mock so scripts/automation depending on that exact,
 already-tested guarantee never break — just a fix to make the existing
 opt-in path visible.
 
+### Post-launch audit (2026-07-29)
+
+A second, broader review pass after the public launch, six independent
+lenses instead of subsystem slices this time (dependency/supply-chain,
+performance/scalability, test quality, documentation accuracy,
+adversarial security red-team, and real-world user research), specifically
+choosing lenses the first hardening pass hadn't already covered rather
+than re-treading the same ground:
+
+- **Most severe finding: the MCP `run_task` tool bypassed permission and
+  audit entirely.** Every other MCP tool goes through `invoke_tool()`'s
+  seam; `run_task` called the router and task engine directly. Since
+  `min_quality_tier` is a caller-supplied MCP argument, any client could
+  force a real, billed cloud completion with zero capability check, zero
+  audit trail, on an arbitrary objective. Fixed by gating the *resolved*
+  provider's actual cost behind `Capability.CREDENTIAL_USE` (not in the
+  MCP server's fixed grant set, so cloud tiers are denied+audited) and
+  audit-logging every call, granted or denied — closing both the
+  cost/DoS vector and the audit gap in one fix.
+- **Real concurrency bug**: SQLite's default rollback-journal mode holds
+  an exclusive write lock for a task's full duration; the dashboard polls
+  `/api/graph` every 2s. Leaving the dashboard open during a real
+  (non-mock) completion hit `database is locked`. Fixed with WAL mode +
+  a more generous busy_timeout.
+- **Missing indexes** on the exact columns the dashboard's live-polling
+  queries sort by (`ORDER BY created_at/updated_at`) — the earlier
+  hot-path-indexes migration covered filter/group columns but missed
+  these. New migration adds them.
+- **Unbounded response buffering** in `web_fetch`/`browser_fetch`:
+  neither capped how much a fetched page could grow before `max_chars`
+  truncation applied. `web_fetch` now streams with a byte cap;
+  `browser_fetch` truncates in-page (JS) before the text crosses the CDP
+  protocol, rather than after.
+- **Dependency/supply-chain audit came back clean** — every pinned
+  version (jinja2, starlette, h11, pydantic, playwright, mcp, and others)
+  already carries the fix for every CVE found against it; no unused
+  dependencies, no GPL-family licenses.
+- **Test suite audit came back strong** — out of ~340 tests, only one
+  real weak-assertion finding (a topology test accepting a 2-value range
+  where the math is deterministic), now pinned to the exact value.
+- **Real user research** (not guessing): pulled real GitHub issues/
+  discussions from Ollama, mem0, and MCP-ecosystem threads. Recurring
+  patterns most relevant to ACR: persistent-memory systems accumulate a
+  lot of low-value/duplicate entries without a quality gate (mem0's own
+  issue tracker documents this in detail); "local-first" claims lose
+  trust fast if any path secretly needs a cloud account; MCP servers
+  broadly have a low trust bar industry-wide, so visible
+  reliability/documentation matters more than existence. Not acted on
+  yet — flagged here as real, sourced input for whatever comes after the
+  launch response is in, not applied blind.
+
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs on every push to `main` and every PR:

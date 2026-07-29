@@ -1,21 +1,22 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Self-improvement proposals</h1>
-<p>
+<p class="lede">
   self_improvement_enabled=<code>{{ self_improvement_enabled }}</code>,
   auto_apply_proposals=<code>{{ auto_apply_proposals }}</code>.
   Proposals require explicit approval (<code>acr improve approve &lt;id&gt;</code>)
   unless auto-apply is on. Read-only view — approve/reject from the CLI.
 </p>
 {% if selected_status %}
-<p>Filtered to <code>{{ selected_status }}</code> — <a href="/proposals">clear</a></p>
+<p class="lede">Filtered to <code>{{ selected_status }}</code> — <a href="/proposals">clear</a></p>
 {% endif %}
+<div class="table-wrap">
 <table>
 <tr><th>ID</th><th>Status</th><th>Kind</th><th>Subject</th><th>Reason</th><th>Created</th><th>Decided</th></tr>
 {% for p in proposals %}
 <tr>
   <td><code>{{ p.id[:8] }}</code></td>
-  <td class="{{ 'status-granted' if p.status.value in ('approved', 'auto_applied') else ('status-denied' if p.status.value == 'rejected' else '') }}">{{ p.status.value }}</td>
+  <td><span class="pill {{ p.status.value | pill_class }}">{{ p.status.value }}</span></td>
   <td>{{ p.kind.value }}</td>
   <td>{{ p.subject }}</td>
   <td>{{ p.reason }}</td>
@@ -26,4 +27,5 @@
 <tr><td colspan="7" class="empty">No proposals yet.</td></tr>
 {% endfor %}
 </table>
+</div>
 {% endblock %}

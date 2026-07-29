@@ -1,17 +1,20 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Model routing ladder</h1>
+<p class="lede">Cheapest qualifying available profile wins. Escalation tries tiers in ascending order on verification failure.</p>
+<div class="table-wrap">
 <table>
-<tr><th>Profile</th><th>Quality tier</th><th>Cost / 1k tokens</th><th>Availability</th></tr>
+<tr><th>Profile</th><th class="num">Quality tier</th><th class="num">Cost / 1k tokens</th><th>Availability</th></tr>
 {% for profile, available in availability %}
 <tr>
   <td>{{ profile.name }}</td>
-  <td>{{ profile.quality_tier }}</td>
-  <td>{{ "%.4f" | format(profile.cost_per_1k_tokens) }}</td>
-  <td class="{{ 'status-available' if available else 'status-unavailable' }}">{{ "available" if available else "unavailable" }}</td>
+  <td class="num">{{ profile.quality_tier }}</td>
+  <td class="num">{{ "%.4f" | format(profile.cost_per_1k_tokens) }}</td>
+  <td><span class="pill {{ ('available' if available else 'unavailable') | pill_class }}">{{ "available" if available else "unavailable" }}</span></td>
 </tr>
 {% else %}
 <tr><td colspan="4" class="empty">No profiles configured.</td></tr>
 {% endfor %}
 </table>
+</div>
 {% endblock %}

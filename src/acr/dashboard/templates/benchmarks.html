@@ -1,17 +1,19 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Benchmark runs</h1>
+<div class="table-wrap">
 <table>
-<tr><th>Suite</th><th>Score</th><th>Passed / total</th><th>When</th></tr>
+<tr><th>Suite</th><th class="num">Score</th><th class="num">Passed / total</th><th>When</th></tr>
 {% for r in runs %}
 <tr>
   <td>{{ r.suite_name }}</td>
-  <td>{{ "%.2f" | format(r.score) }}</td>
-  <td>{{ r.passed_cases }} / {{ r.total_cases }}</td>
+  <td class="num">{{ "%.2f" | format(r.score) }}</td>
+  <td class="num">{{ r.passed_cases }} / {{ r.total_cases }}</td>
   <td>{{ r.created_at }}</td>
 </tr>
 {% else %}
 <tr><td colspan="4" class="empty">No benchmark runs recorded yet.</td></tr>
 {% endfor %}
 </table>
+</div>
 {% endblock %}

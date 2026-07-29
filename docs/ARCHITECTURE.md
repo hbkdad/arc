@@ -623,6 +623,57 @@ the simplest transport that's still genuinely live, and there's no
 existing push/streaming infrastructure this phase would otherwise have to
 invent just to serve one page.
 
+### Dashboard and visualization UI/UX overhaul (2026-07-29)
+
+The dashboard was functionally complete but visually default-browser-
+styled (unstyled `<table>`s, plain colored text for status, no real type
+scale). Rebuilt `base.html` with a real design system reusing the same
+tokens the public landing page established (warm palette, copper accent,
+sage secondary, monospace-for-labels/sans-for-body pairing) for cross-
+surface brand consistency — both light and dark themes, following
+`prefers-color-scheme`. Added reusable components (`.metric-card`,
+`.pill`, `.table-wrap` for horizontal-scroll safety) and a single
+`pill_class` Jinja filter (`acr.dashboard.app._pill_class`) mapping every
+status/outcome vocabulary the dashboard displays to one consistent visual
+language, replacing the old per-page `status-{{ value }}` string-match
+CSS that silently rendered unstyled for any value nobody had added a rule
+for. Applied across all 11 content templates; zero changes to
+`acr.dashboard.queries` or any route's data logic — presentation only.
+
+The visualization tab specifically got a real research-informed redesign
+(competitive review of LangSmith, Langfuse, Helicone, Arize Phoenix, and
+W&B's trace/observability UIs, plus Obsidian/Roam/Logseq's knowledge-graph
+views — see git history for the full sourced findings). Two load-bearing
+conclusions from that research:
+- Every observability tool surveyed keeps a table/timeline as the
+  *primary* debugging surface and a graph/DAG view as secondary and
+  exploratory, never the main way to find out why something failed —
+  which validates this dashboard's existing shape (Tasks/Events/Security
+  stay tables; Visualization was already the secondary view) rather than
+  suggesting a restructure.
+- What actually fixes a "pretty but useless" graph (Obsidian's own
+  community's description of its graph view past ~200 notes) isn't a
+  better layout algorithm — Logseq's fix for Roam's "unusable" graph was
+  interactivity (hover, filter, click), not improved physics.
+
+Implemented accordingly, still zero new dependencies (hand-written
+Canvas2D, no charting/graph library, consistent with the "no advanced
+graphics" scope decision above): real hover tooltips on every shape
+(memory ring, task square, agent diamond, event dot) showing the actual
+underlying record; a light force-directed layout for memory-type rings
+(spring-to-ideal-angle + pairwise repulsion + damping — under 40 lines,
+no physics library) replacing the previous fixed circular placement;
+drag-to-pin a ring in place (double-click to release); and an HTML legend
+above the canvas replacing a paragraph of prose. Colors are read from the
+same CSS custom properties `base.html` defines via `getComputedStyle`, so
+the canvas automatically matches the active theme instead of carrying a
+second, hardcoded color set that would drift out of sync. Verified for
+real in the browser (not just read): hover tooltips confirmed showing
+actual task/memory content, drag-and-pin confirmed moving and persisting
+a ring's position, both light and dark themes and a mobile viewport
+checked, `.claude/launch.json` added so `acr dashboard serve` previews
+directly in future sessions.
+
 ## Integrations: MCP server (Phase 13, first sub-slice)
 
 Master §1707-1713 lists six integration targets (MCP, Claude Code, Codex,

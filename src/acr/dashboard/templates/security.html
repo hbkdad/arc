@@ -1,12 +1,13 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Security audit log</h1>
+<div class="table-wrap">
 <table>
 <tr><th>Action</th><th>Outcome</th><th>Task</th><th>Detail</th><th>When</th></tr>
 {% for e in events %}
 <tr>
   <td><code>{{ e.payload.get("action") }}</code></td>
-  <td class="status-{{ e.payload.get('outcome') }}">{{ e.payload.get("outcome") }}</td>
+  <td><span class="pill {{ e.payload.get('outcome') | pill_class }}">{{ e.payload.get("outcome") }}</span></td>
   <td>{{ e.task_id or "—" }}</td>
   <td>{{ e.payload.get("reason") or e.payload.get("detail") or "" }}</td>
   <td>{{ e.created_at }}</td>
@@ -15,4 +16,5 @@
 <tr><td colspan="5" class="empty">No security events recorded yet.</td></tr>
 {% endfor %}
 </table>
+</div>
 {% endblock %}

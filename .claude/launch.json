@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "acr-dashboard",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "acr", "dashboard", "serve"],
+      "port": 8765
+    }
+  ]
+}

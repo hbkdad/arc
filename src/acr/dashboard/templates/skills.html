@@ -1,21 +1,23 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Skills</h1>
+<div class="table-wrap">
 <table>
-<tr><th>ID</th><th>Name</th><th>Status</th><th>Origin</th><th>Reliability</th><th>Successful</th><th>Failed</th><th>Task classes</th></tr>
+<tr><th>ID</th><th>Name</th><th>Status</th><th>Origin</th><th class="num">Reliability</th><th class="num">Successful</th><th class="num">Failed</th><th>Task classes</th></tr>
 {% for s in skills %}
 <tr>
   <td><code>{{ s.id }}</code></td>
   <td>{{ s.name }}</td>
-  <td>{{ s.status.value }}</td>
+  <td><span class="pill {{ s.status.value | pill_class }}">{{ s.status.value }}</span></td>
   <td>{{ s.origin }}</td>
-  <td>{{ "%.2f" | format(s.reliability) }}</td>
-  <td>{{ s.successful_uses }}</td>
-  <td>{{ s.failed_uses }}</td>
+  <td class="num">{{ "%.2f" | format(s.reliability) }}</td>
+  <td class="num">{{ s.successful_uses }}</td>
+  <td class="num">{{ s.failed_uses }}</td>
   <td>{{ s.task_classes | join(", ") }}</td>
 </tr>
 {% else %}
 <tr><td colspan="8" class="empty">No skills registered yet.</td></tr>
 {% endfor %}
 </table>
+</div>
 {% endblock %}

@@ -1,26 +1,28 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>System health</h1>
+<div class="table-wrap">
 <table>
 <tr><th>Check</th><th>Status</th><th>Detail</th></tr>
 {% for c in checks %}
-<tr><td>{{ c.name }}</td><td class="status-{{ c.status.value }}">{{ c.status.value }}</td><td>{{ c.detail }}</td></tr>
+<tr><td>{{ c.name }}</td><td><span class="pill {{ c.status.value | pill_class }}">{{ c.status.value }}</span></td><td>{{ c.detail }}</td></tr>
 {% endfor %}
 </table>
+</div>
 
 <h1>Task status</h1>
-<div class="counts">
+<div class="metric-grid">
 {% for status, n in task_counts.items() %}
-<div class="count"><span class="n">{{ n }}</span>{{ status }}</div>
+<a class="metric-card" href="/tasks"><span class="n">{{ n }}</span><span class="label">{{ status }}</span></a>
 {% else %}
 <p class="empty">No tasks recorded yet.</p>
 {% endfor %}
 </div>
 
 <h1>Event activity</h1>
-<div class="counts">
+<div class="metric-grid">
 {% for event_type, n in event_counts.items() | sort(attribute="1", reverse=True) %}
-<div class="count"><span class="n">{{ n }}</span>{{ event_type }}</div>
+<a class="metric-card" href="/events?event_type={{ event_type }}"><span class="n">{{ n }}</span><span class="label">{{ event_type }}</span></a>
 {% else %}
 <p class="empty">No telemetry events recorded yet.</p>
 {% endfor %}

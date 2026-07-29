@@ -1,36 +1,38 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Memory</h1>
-<h2>By type</h2>
-<div class="counts">
+<h2 class="section-label">By type</h2>
+<div class="metric-grid">
 {% for type_, n in type_counts.items() %}
-<div class="count"><span class="n">{{ n }}</span>{{ type_ }}</div>
+<div class="metric-card"><span class="n">{{ n }}</span><span class="label">{{ type_ }}</span></div>
 {% else %}
 <p class="empty">No memory records yet.</p>
 {% endfor %}
 </div>
-<h2>By status</h2>
-<div class="counts">
+<h2 class="section-label">By status</h2>
+<div class="metric-grid">
 {% for status, n in status_counts.items() %}
-<div class="count"><span class="n">{{ n }}</span>{{ status }}</div>
+<div class="metric-card"><span class="n">{{ n }}</span><span class="label">{{ status }}</span></div>
 {% endfor %}
 </div>
 
 <h1>Recently updated</h1>
+<div class="table-wrap">
 <table>
-<tr><th>Subject</th><th>Type</th><th>Status</th><th>Scope</th><th>Confidence</th><th>Utility</th><th>Updated</th></tr>
+<tr><th>Subject</th><th>Type</th><th>Status</th><th>Scope</th><th class="num">Confidence</th><th class="num">Utility</th><th>Updated</th></tr>
 {% for m in records %}
 <tr>
   <td>{{ m.subject }}</td>
   <td>{{ m.type.value }}</td>
-  <td>{{ m.status.value }}</td>
+  <td><span class="pill {{ m.status.value | pill_class }}">{{ m.status.value }}</span></td>
   <td>{{ m.scope.value }}</td>
-  <td>{{ "%.2f" | format(m.confidence) }}</td>
-  <td>{{ "%.2f" | format(m.utility_score) }}</td>
+  <td class="num">{{ "%.2f" | format(m.confidence) }}</td>
+  <td class="num">{{ "%.2f" | format(m.utility_score) }}</td>
   <td>{{ m.updated_at }}</td>
 </tr>
 {% else %}
 <tr><td colspan="7" class="empty">No memory records yet.</td></tr>
 {% endfor %}
 </table>
+</div>
 {% endblock %}

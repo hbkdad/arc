@@ -40,6 +40,54 @@ from acr.tools.default_tools import build_default_registry
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 
+# Every status/outcome vocabulary the dashboard displays (task lifecycle,
+# doctor checks, memory/skill/proposal status, audit outcomes, tri-state
+# availability), mapped to one shared visual language -- a page-specific
+# `status-{{ value }}` string match (the old approach) silently rendered
+# unstyled for any value the author hadn't happened to add a CSS rule for.
+# Presentation-only mapping (a CSS class name, not a decision), same
+# category as the `"%.2f" | format(...)` calls already in these templates
+# -- not new business logic the dashboard's docstring forbids.
+_PILL_CLASSES = {
+    "ok": "pill-ok",
+    "completed": "pill-ok",
+    "confirmed": "pill-ok",
+    "active": "pill-ok",
+    "approved": "pill-ok",
+    "auto_applied": "pill-ok",
+    "granted": "pill-ok",
+    "available": "pill-ok",
+    "true": "pill-ok",
+    "warn": "pill-warn",
+    "candidate": "pill-warn",
+    "pending": "pill-warn",
+    "experimental": "pill-warn",
+    "planning": "pill-info",
+    "executing": "pill-info",
+    "verifying": "pill-info",
+    "fail": "pill-danger",
+    "failed": "pill-danger",
+    "rejected": "pill-danger",
+    "denied": "pill-danger",
+    "blocked": "pill-danger",
+    "quarantined": "pill-danger",
+    "unavailable": "pill-danger",
+    "false": "pill-danger",
+    "cancelled": "pill-neutral",
+    "superseded": "pill-neutral",
+    "archived": "pill-neutral",
+    "deprecated": "pill-neutral",
+    "retired": "pill-neutral",
+    "deleted": "pill-neutral",
+    "created": "pill-neutral",
+}
+
+
+def _pill_class(value: object) -> str:
+    """Jinja filter: map a status-shaped value to a `pill-*` CSS class."""
+    key = str(getattr(value, "value", value)).lower()
+    return _PILL_CLASSES.get(key, "pill-neutral")
+
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     """Build the dashboard FastAPI app against `settings` (or the process default)."""
@@ -47,6 +95,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     engine = make_engine(settings)
     session_factory = make_session_factory(engine)
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+    templates.env.filters["pill_class"] = _pill_class
 
     @asynccontextmanager
     async def _lifespan(app: FastAPI) -> AsyncIterator[None]:

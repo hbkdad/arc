@@ -1,17 +1,19 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Tasks</h1>
-<div class="counts">
+<div class="metric-grid">
 {% for status, n in counts.items() %}
-<div class="count"><span class="n">{{ n }}</span>{{ status }}</div>
+<div class="metric-card"><span class="n">{{ n }}</span><span class="label">{{ status }}</span></div>
 {% endfor %}
 </div>
+<div class="table-wrap">
 <table>
 <tr><th>Objective</th><th>Status</th><th>Created</th><th>Updated</th></tr>
 {% for t in tasks %}
-<tr><td>{{ t.objective }}</td><td>{{ t.status.value }}</td><td>{{ t.created_at }}</td><td>{{ t.updated_at }}</td></tr>
+<tr><td>{{ t.objective }}</td><td><span class="pill {{ t.status.value | pill_class }}">{{ t.status.value }}</span></td><td>{{ t.created_at }}</td><td>{{ t.updated_at }}</td></tr>
 {% else %}
 <tr><td colspan="4" class="empty">No tasks recorded yet.</td></tr>
 {% endfor %}
 </table>
+</div>
 {% endblock %}

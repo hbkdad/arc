@@ -1,16 +1,17 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Telemetry events</h1>
-<div class="counts">
+<div class="metric-grid">
 {% for event_type, n in counts.items() | sort(attribute="1", reverse=True) %}
-<div class="count"><a href="/events?event_type={{ event_type }}"><span class="n">{{ n }}</span>{{ event_type }}</a></div>
+<a class="metric-card" href="/events?event_type={{ event_type }}"><span class="n">{{ n }}</span><span class="label">{{ event_type }}</span></a>
 {% else %}
 <p class="empty">No telemetry events recorded yet.</p>
 {% endfor %}
 </div>
 {% if selected_type %}
-<p>Filtered to <code>{{ selected_type }}</code> — <a href="/events">clear</a></p>
+<p class="lede">Filtered to <code>{{ selected_type }}</code> — <a href="/events">clear</a></p>
 {% endif %}
+<div class="table-wrap">
 <table>
 <tr><th>Type</th><th>Task</th><th>Payload</th><th>When</th></tr>
 {% for e in events %}
@@ -24,4 +25,5 @@
 <tr><td colspan="4" class="empty">No events match.</td></tr>
 {% endfor %}
 </table>
+</div>
 {% endblock %}

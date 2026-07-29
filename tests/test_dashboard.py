@@ -12,7 +12,7 @@ from acr.benchmarks import memory_recall
 from acr.benchmarks.runner import run_suite
 from acr.config import Settings
 from acr.core.execution import run_task
-from acr.dashboard.app import create_app
+from acr.dashboard.app import _pill_class, create_app
 from acr.evaluation.evaluators import ExactMatchEvaluator
 from acr.memory import MemoryCandidate, MemoryScope, MemoryType
 from acr.memory.write_controller import remember
@@ -26,6 +26,25 @@ FIXTURES = Path(__file__).parent / "fixtures" / "skills"
 
 def _client(settings: Settings) -> TestClient:
     return TestClient(create_app(settings))
+
+
+def test_pill_class_maps_known_statuses_to_semantic_classes() -> None:
+    assert _pill_class("completed") == "pill-ok"
+    assert _pill_class("failed") == "pill-danger"
+    assert _pill_class("pending") == "pill-warn"
+    assert _pill_class("executing") == "pill-info"
+    assert _pill_class("archived") == "pill-neutral"
+
+
+def test_pill_class_unwraps_an_enum_and_is_case_insensitive() -> None:
+    from acr.core.tasks.models import TaskStatus
+
+    assert _pill_class(TaskStatus.COMPLETED) == "pill-ok"
+    assert _pill_class("COMPLETED") == "pill-ok"
+
+
+def test_pill_class_falls_back_to_neutral_for_an_unknown_value() -> None:
+    assert _pill_class("some-未知-value") == "pill-neutral"
 
 
 async def test_overview_shows_system_health_and_task_activity(

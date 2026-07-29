@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Registered tools</h1>
+<div class="table-wrap">
 <table>
 <tr><th>Name</th><th>Description</th><th>Side effect</th><th>Permissions</th><th>Network</th><th>Filesystem</th></tr>
 {% for t in tools %}
@@ -9,21 +10,23 @@
   <td>{{ t.description }}</td>
   <td>{{ t.side_effect_level.value }}</td>
   <td>{{ t.permissions | join(", ") }}</td>
-  <td>{{ t.network_access }}</td>
-  <td>{{ t.filesystem_access }}</td>
+  <td><span class="pill {{ (t.network_access | string) | pill_class }}">{{ t.network_access }}</span></td>
+  <td><span class="pill {{ (t.filesystem_access | string) | pill_class }}">{{ t.filesystem_access }}</span></td>
 </tr>
 {% else %}
 <tr><td colspan="6" class="empty">No tools registered.</td></tr>
 {% endfor %}
 </table>
+</div>
 
 <h1>Recent invocations</h1>
+<div class="table-wrap">
 <table>
 <tr><th>Action</th><th>Outcome</th><th>Task</th><th>When</th></tr>
 {% for e in invocations %}
 <tr>
   <td><code>{{ e.payload.get("action") }}</code></td>
-  <td class="status-{{ e.payload.get('outcome') }}">{{ e.payload.get("outcome") }}</td>
+  <td><span class="pill {{ e.payload.get('outcome') | pill_class }}">{{ e.payload.get("outcome") }}</span></td>
   <td>{{ e.task_id or "—" }}</td>
   <td>{{ e.created_at }}</td>
 </tr>
@@ -31,4 +34,5 @@
 <tr><td colspan="4" class="empty">No tool invocations recorded yet.</td></tr>
 {% endfor %}
 </table>
+</div>
 {% endblock %}

@@ -88,6 +88,53 @@ async def test_run_task_tool_executes_a_real_task(migrated_settings: Settings) -
     assert body["status"] == "completed"
 
 
+async def test_explain_task_tool_replays_a_real_tasks_telemetry(
+    migrated_settings: Settings,
+) -> None:
+    server = create_mcp_server(migrated_settings)
+    run = _structured(await server.call_tool("run_task", {"objective": "say hi via mcp"}))
+
+    result = await server.call_tool("explain_task", {"task_id": run["id"]})
+
+    body = _structured(result)
+    assert body["objective"] == "say hi via mcp"
+    assert body["status"] == "completed"
+    assert body["provider"] == "mock"
+    assert body["events"]  # a real chronological telemetry trail, not empty
+
+
+async def test_explain_task_tool_reports_an_unknown_task_id(migrated_settings: Settings) -> None:
+    server = create_mcp_server(migrated_settings)
+
+    result = await server.call_tool("explain_task", {"task_id": "does-not-exist"})
+
+    body = _structured(result)
+    assert "error" in body
+
+
+async def test_usage_summary_tool_reports_no_calls_with_an_empty_db(
+    migrated_settings: Settings,
+) -> None:
+    server = create_mcp_server(migrated_settings)
+
+    result = await server.call_tool("usage_summary", {})
+
+    assert _structured(result)["result"] == []
+
+
+async def test_usage_summary_tool_reflects_a_real_completed_call(
+    migrated_settings: Settings,
+) -> None:
+    server = create_mcp_server(migrated_settings)
+    await server.call_tool("run_task", {"objective": "say hi for usage_summary"})
+
+    result = await server.call_tool("usage_summary", {})
+
+    usage = _structured(result)["result"]
+    mock_usage = next(u for u in usage if u["provider"] == "mock")
+    assert mock_usage["call_count"] >= 1
+
+
 async def test_run_task_tool_reports_no_provider_available(migrated_settings: Settings) -> None:
     from mcp.server.mcpserver.exceptions import ToolError
 

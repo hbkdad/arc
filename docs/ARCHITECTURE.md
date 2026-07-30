@@ -857,9 +857,12 @@ not a less — it goes through that check rather than around it). The
 server's fixed grant set is exactly `{memory.read, skill.read,
 network.read}` — nothing beyond what those three read-only tools declare
 (master §1131-1149: default deny). `run_task` mirrors what `acr run`
-already does: the zero-config mock provider, no cost, no external calls —
-real provider routing for MCP-triggered tasks is future work, the same
-caveat the CLI's own `run` carries today.
+already does: the zero-config mock provider by default, no cost, no
+external calls, unless the caller raises `min_quality_tier` (or
+`Settings.default_min_quality_tier` is configured) — real provider
+routing for MCP-triggered tasks landed in a later pass (see "Closing the
+evidence loop" and the `CREDENTIAL_USE` gate on `run_task` further
+below).
 
 `acr mcp serve` defaults to stdio (how Claude Code/Desktop launch a local
 MCP server as a subprocess); `--transport sse` or `--transport
@@ -1798,6 +1801,55 @@ usage/cost tracking feature above, before considering either done:
   property `factory.py`'s `_AlwaysFailsProvider` test already exercises
   for `agents spawn`) — so the loop doesn't need its own handling to
   avoid losing already-completed practice runs to one bad skill.
+
+### Top-to-bottom audit: tests, MCP surface, skills, CLI (2026-07-29)
+
+A broader audit than the "tonight's batch" ones above — coverage,
+the MCP tool surface, first-party skill validity, and CLI consistency
+across the whole repo, plus a real answer to "why doesn't the dashboard
+show any Claude usage."
+
+- **Test coverage**: `pytest --cov=acr` reports 95% overall (3754
+  statements, 198 missed). Every module below 100% was individually
+  checked, not just accepted at face value: `cli.py` (85%, the largest
+  gap) is almost entirely `except GhCliNotFoundError`/`except
+  BrowserNotInstalledError`/similar external-tool-missing branches —
+  real code paths, but ones that require an actually-broken `gh` CLI or
+  missing Playwright install to exercise, not gaps worth chasing with
+  synthetic mocks that would just test the mock. No real untested
+  business logic found.
+- **MCP tool surface, expanded**: `acr.integrations.mcp_server` had 6
+  tools (`memory_search`, `skill_search`, `web_fetch`, `browser_fetch`,
+  `github_search`, `run_task`) but no way for an MCP client to check a
+  task's real outcome or real spend without shelling out to the CLI.
+  Added two more, both plain reads of already-recorded telemetry (no
+  capability gate needed, matching `acr explain`/`acr models usage`'s
+  own CLI commands, which don't have one either, and the dashboard's own
+  read-only presentation layer):
+  - **`explain_task(task_id)`** — wraps `acr.telemetry.explain
+    .explain_task()`; the same provider/tokens/duration/event-trail data
+    `acr explain <task-id>` prints.
+  - **`usage_summary()`** — wraps `usage_by_provider()`; the same
+    per-provider calls/tokens/cost data `/routing` and `acr models
+    usage` show.
+- **Skills**: all 4 first-party skills in `skills/` (`code-review-
+  checklist`, `context-minimization`, `dashboard-ui-audit`,
+  `ui-design-critique`) pass `acr skills validate` — real validation,
+  not a rubber stamp (scenario/adversarial/benchmark checks report
+  `skipped: no code-execution engine exists yet` rather than a
+  fabricated pass, since that engine genuinely doesn't exist).
+- **"Still no Claude info" on `/routing`**: not a bug. `AnthropicCompatibleProvider.is_available()`
+  is `bool(self.api_key)` with zero network calls (master §41: never
+  probe with a key that isn't configured) — `ACR_ANTHROPIC_API_KEY` is
+  simply unset in this environment, which is why the ladder correctly
+  shows `anthropic_compatible` as `unavailable` and the usage table has
+  no Claude row. To see real Claude usage: set `ACR_ANTHROPIC_API_KEY`
+  to a real key (never something an agent should do on the user's
+  behalf) and either pass `--min-quality-tier 2` to `acr run` or set
+  `ACR_DEFAULT_MIN_QUALITY_TIER=2` persistently so routing actually
+  reaches tier 2 instead of stopping at the free mock/Ollama tiers.
+  This session's own Claude Code conversation is a separate system from
+  ACR's routing ladder and was never going to appear here regardless.
 
 ## What's left
 

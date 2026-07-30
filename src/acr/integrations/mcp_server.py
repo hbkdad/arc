@@ -32,7 +32,10 @@ from acr.db.base import make_engine, make_session_factory
 from acr.routing.models import build_default_router
 from acr.security.audit import record_audit_event
 from acr.security.permissions import Capability, PermissionDeniedError, PermissionSet
+from acr.telemetry.explain import TaskNotFoundError
+from acr.telemetry.explain import explain_task as explain_task_impl
 from acr.telemetry.recorder import TelemetryRecorder
+from acr.telemetry.usage import usage_by_provider
 from acr.tools.default_tools import build_default_registry
 from acr.tools.invocation import invoke_tool
 
@@ -238,5 +241,58 @@ def create_mcp_server(settings: Settings | None = None) -> MCPServer:
             )
             await session.commit()
             return {"id": task.id, "objective": task.objective, "status": task.status.value}
+
+    # explain_task/usage_summary are plain reads of already-recorded
+    # telemetry -- no capability gate, matching `acr explain`/`acr models
+    # usage`'s own CLI commands (neither has a permission check either) and
+    # the dashboard's own read-only presentation layer. Nothing here can
+    # trigger a network call, spend a credential, or mutate any state.
+    @server.tool(
+        description=(
+            "Replay a task's real telemetry trail (provider, tokens, duration) -- "
+            "the same data `acr explain <task-id>` prints, for an MCP client "
+            "debugging a task without shelling out to the CLI."
+        )
+    )
+    async def explain_task(task_id: str) -> dict[str, Any]:
+        async with _session() as session:
+            try:
+                explanation = await explain_task_impl(session, task_id)
+            except TaskNotFoundError:
+                return {"error": f"no task with id {task_id!r}"}
+            return {
+                "id": explanation.task.id,
+                "objective": explanation.task.objective,
+                "status": explanation.task.status.value,
+                "provider": explanation.provider,
+                "output_tokens": explanation.output_tokens,
+                "duration_seconds": explanation.duration_seconds,
+                "events": [
+                    {"event_type": e.event_type, "created_at": e.created_at.isoformat()}
+                    for e in explanation.events
+                ],
+            }
+
+    @server.tool(
+        description=(
+            "Real per-provider call counts, tokens, and estimated cost from every "
+            "recorded model.call.completed event -- the same data `/routing` and "
+            "`acr models usage` show, for an MCP client checking spend without a "
+            "browser."
+        )
+    )
+    async def usage_summary() -> list[dict[str, Any]]:
+        async with _session() as session:
+            usage = await usage_by_provider(session, router.profiles)
+            return [
+                {
+                    "provider": u.provider,
+                    "call_count": u.call_count,
+                    "input_tokens": u.input_tokens,
+                    "output_tokens": u.output_tokens,
+                    "estimated_cost": u.estimated_cost,
+                }
+                for u in usage
+            ]
 
     return server

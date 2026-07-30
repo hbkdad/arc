@@ -14,8 +14,10 @@
 // community's description of its graph view past ~200 notes) to actually
 // useful isn't a better layout algorithm, it's interactivity -- Logseq's
 // fix for Roam's "unusable" graph was hover/filter/click, not physics.
-// Hence: real hover tooltips and drag-to-pin below, on top of a light
-// force-directed layout for the memory-type rings.
+// Hence: real hover tooltips, drag-to-pin, and hover-neighbor-highlight
+// below, on top of a real edge-based force layout over ACR's actual
+// entities (memory types, task classes, skills, models) -- an Obsidian-
+// style node graph, not just memory-type rings orbiting a core.
 
 (function () {
   "use strict";
@@ -131,17 +133,10 @@
     };
   }
 
-  function typePalette(t) {
-    return [t.wire, t.info, t.ok, t.warn, t.danger, t.accent];
-  }
-
-  function colorForType(name, palette) {
-    let hash = 0;
-    for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
-    return palette[hash % palette.length];
-  }
-
-  let latest = { memory_types: [], tasks: [], agents: [], events: [] };
+  let latest = {
+    memory_types: [], tasks: [], agents: [], events: [],
+    task_classes: [], skills: [], models: [], edges: [],
+  };
   let lastNewestEventKey = null;
   let pulseUntil = 0; // performance.now() timestamp; core flashes until this time
 
@@ -170,75 +165,161 @@
     }
   }
 
-  // --- memory-ring force layout -----------------------------------------
-  // Spring-to-ideal-angle + pairwise repulsion + damping: settles into an
-  // organic, non-overlapping arrangement instead of a rigid fixed circle,
-  // without pulling in a physics/graph library for a handful of nodes.
-  let ringSim = [];
+  // --- unified force graph -----------------------------------------------
+  // A real node-link graph (Obsidian's own graph view is the reference
+  // point) over ACR's actual entities -- memory types, task classes,
+  // skills, models -- connected by the real edges `/api/graph` derives
+  // from `AgentTopologyRecord.skill_ids`/`model_names` and per-provider
+  // usage (see `_topology_graph()` server-side). "core" is a virtual
+  // 21st node fixed at canvas center, not part of `graphNodes` -- every
+  // memory-type and task-class node gets an implicit edge to it (real:
+  // ACR genuinely has that memory type / has run that task class), while
+  // skill/model nodes only connect through their real task-class edges,
+  // so they naturally cluster near whichever task class actually uses
+  // them rather than orbiting the core directly.
+  //
+  // Edge-based springs (not a fixed "ideal angle" like the old memory-
+  // only ring layout) plus pairwise repulsion plus a weak center-pull is
+  // the same algorithm family Obsidian/D3 force graphs use: connected
+  // nodes cluster together, unconnected ones drift to the outskirts.
+  let graphNodes = [];
+  let graphEdges = []; // [{a: id|"core", b: id, weight}]
 
-  function syncRingSim(types, cx, cy) {
-    const n = types.length;
-    const orbit = 150;
-    const byType = new Map(ringSim.map((s) => [s.type, s]));
-    ringSim = types.map((m, i) => {
-      const angle = (i / n) * Math.PI * 2;
-      const idealX = cx + orbit * Math.cos(angle);
-      const idealY = cy + orbit * Math.sin(angle);
-      const r = 10 + Math.min(30, Math.sqrt(m.count) * 6);
-      const prev = byType.get(m.type);
-      if (prev) {
-        prev.count = m.count;
-        prev.r = r;
-        prev.idealX = idealX;
-        prev.idealY = idealY;
-        return prev;
-      }
-      return {
-        type: m.type, count: m.count, r, idealX, idealY,
-        x: idealX, y: idealY, vx: 0, vy: 0, pinned: false,
-      };
-    });
+  function hashAngle(id) {
+    let hash = 0;
+    for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
+    return (hash % 360) * (Math.PI / 180);
   }
 
-  function stepPhysics() {
+  function syncGraphSim(data, cx, cy) {
+    const byId = new Map(graphNodes.map((n) => [n.id, n]));
+    const next = [];
+
+    function upsert(id, kind, r, label, detail) {
+      const prev = byId.get(id);
+      if (prev) {
+        prev.kind = kind; prev.r = r; prev.label = label; prev.detail = detail;
+        next.push(prev);
+        return;
+      }
+      // Spawn near the core on a deterministic (id-hashed, not random)
+      // angle -- stable across reconnects/polls instead of jittering a
+      // brand-new node to a different spot every 2s.
+      const angle = hashAngle(id);
+      next.push({
+        id, kind, r, label, detail,
+        x: cx + 30 * Math.cos(angle), y: cy + 30 * Math.sin(angle),
+        vx: 0, vy: 0, pinned: false,
+      });
+    }
+
+    data.memory_types.forEach((m) =>
+      upsert("memory:" + m.type, "memory", 10 + Math.min(28, Math.sqrt(m.count) * 6), m.type, m.count + " record(s)")
+    );
+    data.task_classes.forEach((tc) =>
+      upsert(
+        "taskclass:" + tc.id, "taskclass", 10 + Math.min(24, Math.sqrt(tc.count) * 7), tc.id,
+        tc.count + " spawn(s), " + tc.succeeded_count + " succeeded"
+      )
+    );
+    data.skills.forEach((s) =>
+      upsert("skill:" + s.id, "skill", 8 + Math.min(18, Math.sqrt(s.count) * 5), s.id, "routed " + s.count + "x")
+    );
+    data.models.forEach((m) =>
+      upsert(
+        "model:" + m.name, "model", 8 + Math.min(22, Math.sqrt(m.call_count) * 5), m.name,
+        m.call_count + " call(s)" + (m.estimated_cost != null ? ", est. $" + m.estimated_cost.toFixed(4) : "")
+      )
+    );
+    graphNodes = next;
+
+    const edges = [];
+    data.memory_types.forEach((m) => edges.push({ a: "core", b: "memory:" + m.type, weight: 1 }));
+    data.task_classes.forEach((tc) => edges.push({ a: "core", b: "taskclass:" + tc.id, weight: 1 }));
+    data.edges.forEach((e) =>
+      edges.push({ a: e.source, b: e.target, weight: Math.max(1, Math.log10((e.tokens || 0) + 10)) })
+    );
+    graphEdges = edges;
+  }
+
+  function stepGraphPhysics(cx, cy) {
     const SPRING = 0.02;
-    const REPEL = 1100;
+    const REPEL = 900;
     const DAMPING = 0.82;
-    let energy = 0;
-    for (let i = 0; i < ringSim.length; i++) {
-      const a = ringSim[i];
-      if (a.pinned) { energy += a.vx * a.vx + a.vy * a.vy; continue; }
-      let fx = (a.idealX - a.x) * SPRING;
-      let fy = (a.idealY - a.y) * SPRING;
-      for (let j = 0; j < ringSim.length; j++) {
-        if (i === j) continue;
-        const b = ringSim[j];
+    const EDGE_LEN = 85;
+    const byId = new Map(graphNodes.map((n) => [n.id, n]));
+
+    graphNodes.forEach((n) => { n._fx = 0; n._fy = 0; });
+
+    for (let i = 0; i < graphNodes.length; i++) {
+      const a = graphNodes[i];
+      for (let j = i + 1; j < graphNodes.length; j++) {
+        const b = graphNodes[j];
         const dx = a.x - b.x, dy = a.y - b.y;
         const distSq = Math.max(dx * dx + dy * dy, 100);
         const dist = Math.sqrt(distSq);
         const force = REPEL / distSq;
-        fx += (dx / dist) * force;
-        fy += (dy / dist) * force;
+        const fx = (dx / dist) * force, fy = (dy / dist) * force;
+        a._fx += fx; a._fy += fy;
+        b._fx -= fx; b._fy -= fy;
       }
-      a.vx = (a.vx + fx) * DAMPING;
-      a.vy = (a.vy + fy) * DAMPING;
-      a.x += a.vx;
-      a.y += a.vy;
-      energy += a.vx * a.vx + a.vy * a.vy;
+      // Weak pull toward canvas center so the whole graph settles inside
+      // view instead of drifting -- much gentler than an edge spring, it
+      // only matters once nothing else is pulling a node inward.
+      a._fx += (cx - a.x) * 0.001;
+      a._fy += (cy - a.y) * 0.001;
     }
-    return energy;
+
+    graphEdges.forEach((e) => {
+      const aFixed = e.a === "core";
+      const aPos = aFixed ? { x: cx, y: cy } : byId.get(e.a);
+      const bNode = byId.get(e.b);
+      if (!aPos || !bNode) return;
+      const idealLen = EDGE_LEN / e.weight;
+      const dx = bNode.x - aPos.x, dy = bNode.y - aPos.y;
+      const dist = Math.max(Math.sqrt(dx * dx + dy * dy), 1);
+      const force = (dist - idealLen) * SPRING;
+      const nx = dx / dist, ny = dy / dist;
+      bNode._fx -= nx * force;
+      bNode._fy -= ny * force;
+      if (!aFixed) {
+        const aNode = byId.get(e.a);
+        if (aNode) { aNode._fx += nx * force; aNode._fy += ny * force; }
+      }
+    });
+
+    graphNodes.forEach((n) => {
+      if (n.pinned) return;
+      n.vx = (n.vx + n._fx) * DAMPING;
+      n.vy = (n.vy + n._fy) * DAMPING;
+      n.x += n.vx;
+      n.y += n.vy;
+    });
+  }
+
+  // Real Obsidian-style hover behavior: the hovered node and everything
+  // directly connected to it stay at full opacity; everything else dims,
+  // so relationships pop out instead of needing to be untangled by eye
+  // from a static tangle of equally-bright lines.
+  function neighborIds(nodeId) {
+    const ids = new Set([nodeId]);
+    graphEdges.forEach((e) => {
+      if (e.a === nodeId) ids.add(e.b);
+      if (e.b === nodeId) ids.add(e.a);
+    });
+    return ids;
   }
 
   // --- pointer interaction (hover tooltip + drag-to-pin) ------------------
   let hoverTargets = []; // rebuilt every frame: [{x, y, r, label, detail}]
   let hovered = null;
-  let dragging = null; // a ringSim entry currently being dragged
+  let dragging = null; // a graphNodes entry currently being dragged
   let mouse = null; // {x, y} in canvas-internal coordinates, or null
 
   function canvasPoint(evt) {
     const rect = canvas.getBoundingClientRect();
-    // Map into the LOGICAL coordinate space (what hoverTargets/ringSim are
-    // expressed in), not the DPR-scaled backing-store pixel space.
+    // Map into the LOGICAL coordinate space (what hoverTargets/graphNodes
+    // are expressed in), not the DPR-scaled backing-store pixel space.
     const scaleX = LOGICAL_W / rect.width;
     const scaleY = LOGICAL_H / rect.height;
     return { x: (evt.clientX - rect.left) * scaleX, y: (evt.clientY - rect.top) * scaleY };
@@ -264,13 +345,13 @@
       dragging.vy = 0;
     } else {
       hovered = hitTest(mouse);
-      canvas.style.cursor = hovered && hovered.ring ? "grab" : hovered ? "pointer" : "default";
+      canvas.style.cursor = hovered && hovered.node ? "grab" : hovered ? "pointer" : "default";
     }
   });
 
   canvas.addEventListener("mousedown", () => {
-    if (hovered && hovered.ring) {
-      dragging = hovered.ring;
+    if (hovered && hovered.node) {
+      dragging = hovered.node;
       dragging.pinned = true;
       canvas.style.cursor = "grabbing";
     }
@@ -281,8 +362,8 @@
   });
 
   canvas.addEventListener("dblclick", () => {
-    // Double-click a pinned ring to release it back to the simulation.
-    if (hovered && hovered.ring) hovered.ring.pinned = false;
+    // Double-click a pinned node to release it back to the simulation.
+    if (hovered && hovered.node) hovered.node.pinned = false;
   });
 
   canvas.addEventListener("mouseleave", () => {
@@ -339,27 +420,59 @@
     hoverTargets.push({ x: cx, y: cy, r: radius, label: "core", detail: "pulses on each new telemetry event" });
   }
 
-  function drawMemoryRings(th, cx, cy) {
-    const palette = typePalette(th);
-    if (!ringSim.length) return;
-    ringSim.forEach((s) => {
-      const swatch = colorForType(s.type, palette);
+  function kindColor(th, kind) {
+    switch (kind) {
+      case "memory": return th.wire;
+      case "taskclass": return th.info;
+      case "skill": return th.ok;
+      case "model": return th.accent;
+      default: return th.inkDim;
+    }
+  }
+
+  function drawGraphEdges(th, cx, cy, highlight) {
+    const byId = new Map(graphNodes.map((n) => [n.id, n]));
+    graphEdges.forEach((e) => {
+      const aPos = e.a === "core" ? { x: cx, y: cy } : byId.get(e.a);
+      const bNode = byId.get(e.b);
+      if (!aPos || !bNode) return;
+      const dim = highlight && !(highlight.has(e.a) && highlight.has(e.b));
+      ctx.strokeStyle = th.line;
+      ctx.globalAlpha = dim ? 0.12 : Math.min(0.85, 0.25 + e.weight * 0.15);
+      ctx.lineWidth = dim ? 1 : Math.min(3, 1 + e.weight * 0.4);
+      ctx.beginPath();
+      ctx.moveTo(aPos.x, aPos.y);
+      ctx.lineTo(bNode.x, bNode.y);
+      ctx.stroke();
+    });
+    ctx.globalAlpha = 1;
+  }
+
+  function drawGraphNodes(th, highlight) {
+    graphNodes.forEach((n) => {
+      const swatch = kindColor(th, n.kind);
+      const dim = highlight && !highlight.has(n.id);
+      ctx.globalAlpha = dim ? 0.25 : 1;
       withGlow(th, swatch, () => {
         ctx.beginPath();
-        ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+        ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
         ctx.fillStyle = swatch + "aa";
         ctx.fill();
-        ctx.strokeStyle = s.pinned ? th.ink : swatch;
-        ctx.lineWidth = s.pinned ? 2 : 1;
+        ctx.strokeStyle = n.pinned ? th.ink : swatch;
+        ctx.lineWidth = n.pinned ? 2 : 1;
         ctx.stroke();
       });
-      ctx.fillStyle = th.inkDim;
-      ctx.font = "11px system-ui, sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText(s.type + " (" + s.count + ")", s.x, s.y + s.r + 14);
+      if (!dim) {
+        ctx.fillStyle = th.inkDim;
+        ctx.font = "10px system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText(n.label, n.x, n.y + n.r + 12);
+      }
+      ctx.globalAlpha = 1;
       hoverTargets.push({
-        x: s.x, y: s.y, r: Math.max(s.r, 14), ring: s,
-        label: s.type, detail: s.count + " record(s)" + (s.pinned ? " — pinned, double-click to release" : ""),
+        x: n.x, y: n.y, r: Math.max(n.r, 12), node: n,
+        label: n.kind + ": " + n.label,
+        detail: n.detail + (n.pinned ? " — pinned, double-click to release" : ""),
       });
     });
   }
@@ -385,33 +498,6 @@
     ctx.font = "11px system-ui, sans-serif";
     ctx.textAlign = "left";
     ctx.fillText("tasks (newest first, colored by status)", 30, y - 14);
-  }
-
-  function drawAgents(th, width, height) {
-    const y = height - 90;
-    const agents = latest.agents;
-    agents.forEach((agent, i) => {
-      const x = 30 + i * ((width - 60) / Math.max(agents.length, 1));
-      const size = 6 + agent.quality_score * 10;
-      const swatch = agent.succeeded ? th.ok : th.danger;
-      withGlow(th, swatch, () => {
-        ctx.save();
-        ctx.translate(x, y);
-        ctx.rotate(Math.PI / 4);
-        ctx.fillStyle = swatch + "99";
-        ctx.fillRect(-size / 2, -size / 2, size, size);
-        ctx.restore();
-      });
-      hoverTargets.push({
-        x, y, r: Math.max(size, 10),
-        label: agent.task_class + " (" + agent.worker_count + " worker" + (agent.worker_count === 1 ? "" : "s") + ")",
-        detail: "quality " + agent.quality_score.toFixed(2) + " — " + (agent.succeeded ? "succeeded" : "failed"),
-      });
-    });
-    ctx.fillStyle = th.inkDim;
-    ctx.font = "11px system-ui, sans-serif";
-    ctx.textAlign = "left";
-    ctx.fillText("agent spawns (size = quality, color = succeeded)", 30, y - 14);
   }
 
   function drawEventTimeline(th, width, height) {
@@ -587,14 +673,21 @@
       const cx = width / 2;
       const cy = height / 2 - 20;
 
-      syncRingSim(latest.memory_types, cx, cy);
-      stepPhysics();
+      syncGraphSim(latest, cx, cy);
+      stepGraphPhysics(cx, cy);
+
+      // Computed from *last* frame's hover (one-frame lag, imperceptible
+      // at 60fps) since this frame's hoverTargets aren't built until
+      // drawGraphNodes runs below -- same ordering constraint the
+      // tooltip already lives with.
+      const highlight =
+        hovered && hovered.node && !dragging ? neighborIds(hovered.node.id) : null;
 
       hoverTargets = [];
       drawTasks(th, width);
-      drawMemoryRings(th, cx, cy);
+      drawGraphEdges(th, cx, cy, highlight);
+      drawGraphNodes(th, highlight);
       drawCore(th, cx, cy, elapsed);
-      drawAgents(th, width, height);
       drawEventTimeline(th, width, height);
       if (mouse) hovered = hitTest(mouse);
       drawTooltip(ctx, th, dragging ? null : hovered, width, height);

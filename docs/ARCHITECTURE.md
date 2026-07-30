@@ -1289,6 +1289,68 @@ rather than assumed correct:
   server-rendered content (everything except the two `<canvas>` views)
   was verified normally.
 
+### Obsidian-style graph: real node-link relationships (2026-07-29)
+
+Follow-up to the visual overhaul above, specifically for `/visualization`'s
+graph view: by explicit user request, made it "look like Obsidian" -- a
+real node-link force graph, not scattered rows of shapes with no
+connecting lines (the previous graph had memory-type rings orbiting a
+core, but tasks/agents/events were separate strips with no edges at all).
+
+Every edge is a real, already-recorded fact, never inferred:
+`AgentTopologyRecord` already denormalizes `skill_ids`/`model_names`/
+`total_tokens`/`cost_estimate` onto each row (`factory.spawn_agent()`
+writes `model_names=[provider.name]` -- the same string
+`usage_by_provider()` groups by, so task-class-to-model edges merge real
+usage cost/tokens onto the same real join key, no guessed mapping).
+`app.py`'s new `_topology_graph()` turns the `agent_records` the route
+already fetches into `task_classes`/`skills`/`models` node lists and
+`edges` (`taskclass -> skill`, `taskclass -> model`, weighted by real
+tokens/cost) -- no new query, purely presentation-shaping over rows
+already in hand, same category as `_pill_class`.
+
+`visualization.js`'s memory-only ring physics (`ringSim`/`stepPhysics`)
+was generalized into a real force graph (`graphNodes`/`graphEdges`,
+`syncGraphSim`/`stepGraphPhysics`): edge-based springs (not a fixed
+"ideal angle") plus pairwise repulsion plus a weak center-pull -- the
+same algorithm family Obsidian/D3 force graphs use. Skill/model nodes
+only connect through their real task-class edges rather than orbiting
+the core directly, so they visibly cluster near whichever task class
+actually uses them. A virtual `"core"` node (fixed at canvas center, not
+part of the physics array) anchors memory-type and task-class nodes via
+an implicit edge -- real containment ("ACR genuinely has this memory
+type / has run this task class"), not fabricated.
+
+Added the real Obsidian interaction that makes a node graph useful
+rather than "pretty but useless" past a few dozen nodes (the same
+finding the original Phase 12 competitive review already cited, from the
+Obsidian/Logseq community itself): hovering a node highlights it and its
+directly-connected neighbors at full opacity, dims everything else via
+`neighborIds()` + `ctx.globalAlpha`, computed from the previous frame's
+hover state (one-frame lag, imperceptible at 60fps, same ordering
+constraint the existing tooltip already lived with). Drag-to-pin and
+double-click-to-release, previously memory-ring-only, now work on every
+node kind.
+
+The old separate "agent spawns" diamond row (`drawAgents()`) was removed,
+not just left alongside the new graph -- the same underlying
+`agent_records` it drew from now render far more richly as real
+task-class graph nodes with genuine skill/model edges, and keeping both
+would have meant showing the same data twice, once with connections and
+once without. `drawTasks()` (individual recent tasks, which don't all
+have a `task_class`) and `drawEventTimeline()` (raw event flow) stayed,
+since neither duplicates what the new graph nodes show.
+
+Verified the same way the timeline view was: this tool's Browser-pane tab
+is `document.hidden`, so `requestAnimationFrame` never actually fires
+here, meaning pixel/screenshot confirmation isn't available this
+session. Re-implemented `syncGraphSim`/`stepGraphPhysics` verbatim in a
+one-off script, ran 200 simulation steps against the real fetched
+`/api/graph` payload, and confirmed every node settles to a finite,
+non-overlapping position with skill/model nodes landing near their real
+task-class neighbor -- the algorithm itself is correct; only the
+in-browser paint couldn't be screenshotted this session.
+
 ### Code-review hardening pass (2026-07-29)
 
 A systematic review pass (three independent reviewers, one per subsystem

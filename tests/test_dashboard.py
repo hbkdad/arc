@@ -317,12 +317,60 @@ async def test_api_graph_reflects_real_seeded_data(
     assert any(e["event_type"] == "task.created" for e in body["events"])
 
 
+async def test_api_graph_derives_real_topology_edges_and_usage_nodes(
+    migrated_settings: Settings, db_session: AsyncSession
+) -> None:
+    await run_task(db_session, "say hello", MockProvider(), TelemetryRecorder())
+    await record_topology(
+        db_session,
+        task_class="ui-audit",
+        worker_count=1,
+        model_names=["mock"],
+        skill_ids=["dashboard-ui-audit", "ui-design-critique"],
+        total_tokens=120,
+        cost_estimate=0.02,
+        quality_score=1.0,
+        succeeded=True,
+    )
+    await db_session.commit()
+
+    response = _client(migrated_settings).get("/api/graph")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert {"id": "ui-audit", "count": 1, "succeeded_count": 1} in body["task_classes"]
+    assert {"id": "dashboard-ui-audit", "count": 1} in body["skills"]
+    assert {"id": "ui-design-critique", "count": 1} in body["skills"]
+    model = next(m for m in body["models"] if m["name"] == "mock")
+    assert model["call_count"] >= 1  # from the real run_task() model.call.completed event
+    assert model["estimated_cost"] is not None
+    assert {
+        "source": "taskclass:ui-audit",
+        "target": "skill:dashboard-ui-audit",
+        "kind": "uses_skill",
+    } in body["edges"]
+    model_edge = next(
+        e for e in body["edges"] if e["kind"] == "uses_model" and e["target"] == "model:mock"
+    )
+    assert model_edge["tokens"] == 120
+    assert model_edge["cost"] == 0.02
+
+
 async def test_api_graph_is_empty_but_valid_with_no_data(migrated_settings: Settings) -> None:
     response = _client(migrated_settings).get("/api/graph")
 
     assert response.status_code == 200
     body = response.json()
-    assert body == {"memory_types": [], "tasks": [], "agents": [], "events": []}
+    assert body == {
+        "memory_types": [],
+        "tasks": [],
+        "agents": [],
+        "events": [],
+        "task_classes": [],
+        "skills": [],
+        "models": [],
+        "edges": [],
+    }
 
 
 async def test_overview_page_renders_activity_sparkline_charts(

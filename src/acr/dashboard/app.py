@@ -27,6 +27,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from acr.agents.topology import AgentTopologyRecord
 from acr.config import Settings, get_settings
 from acr.dashboard import queries
 from acr.db.base import make_engine, make_session_factory
@@ -36,7 +37,7 @@ from acr.learning.proposals import ProposalStatus, list_proposals
 from acr.routing.models import ModelProfile, build_default_router
 from acr.security.audit import recent_audit_events
 from acr.skills.registry import list_skills
-from acr.telemetry.usage import usage_by_provider
+from acr.telemetry.usage import ProviderUsage, usage_by_provider
 from acr.tools.default_tools import build_default_registry
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -89,6 +90,78 @@ def _pill_class(value: object) -> str:
     """Jinja filter: map a status-shaped value to a `pill-*` CSS class."""
     key = str(getattr(value, "value", value)).lower()
     return _PILL_CLASSES.get(key, "pill-neutral")
+
+
+def _topology_graph(
+    agent_records: list[AgentTopologyRecord], usage: list[ProviderUsage]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Real relationships for the `/visualization` node-link graph, built
+    entirely from data the caller already fetched -- `AgentTopologyRecord`
+    already denormalizes `skill_ids`/`model_names`/`total_tokens`/
+    `cost_estimate` onto each row (see `agents/topology.py`), so every
+    edge here is a direct real fact ("this task class used this skill/
+    model, for this many tokens"), never inferred or fabricated. No new
+    query: this is presentation-shaping over rows the route already has,
+    the same category as `_pill_class` above.
+    """
+    by_task_class: dict[str, list[AgentTopologyRecord]] = {}
+    for rec in agent_records:
+        by_task_class.setdefault(rec.task_class, []).append(rec)
+    task_classes = [
+        {
+            "id": tc,
+            "count": len(recs),
+            "succeeded_count": sum(1 for r in recs if r.succeeded),
+        }
+        for tc, recs in by_task_class.items()
+    ]
+
+    skill_counts: dict[str, int] = {}
+    skill_edges: set[tuple[str, str]] = set()
+    model_weights: dict[tuple[str, str], dict[str, float]] = {}
+    for rec in agent_records:
+        for skill_id in rec.skill_ids:
+            skill_counts[skill_id] = skill_counts.get(skill_id, 0) + 1
+            skill_edges.add((rec.task_class, skill_id))
+        for model_name in rec.model_names:
+            agg = model_weights.setdefault(
+                (rec.task_class, model_name), {"tokens": 0.0, "cost": 0.0}
+            )
+            agg["tokens"] += rec.total_tokens
+            agg["cost"] += rec.cost_estimate
+    skills = [{"id": sid, "count": count} for sid, count in skill_counts.items()]
+
+    # Provider name is the one real join key between topology's
+    # `model_names` and telemetry-derived usage -- `factory.spawn_agent()`
+    # records `model_names=[provider.name]`, the exact string
+    # `usage_by_provider()` groups by, so this is a real merge, not a
+    # guessed mapping between two independently-named vocabularies.
+    usage_by_name = {u.provider: u for u in usage}
+    model_names = {name for _tc, name in model_weights} | set(usage_by_name)
+    models = [
+        {
+            "name": name,
+            "call_count": usage_by_name[name].call_count if name in usage_by_name else 0,
+            "estimated_cost": usage_by_name[name].estimated_cost if name in usage_by_name else None,
+        }
+        for name in sorted(model_names)
+    ]
+
+    edges: list[dict[str, Any]] = [
+        {"source": "taskclass:" + tc, "target": "skill:" + sid, "kind": "uses_skill"}
+        for tc, sid in sorted(skill_edges)
+    ]
+    edges += [
+        {
+            "source": "taskclass:" + tc,
+            "target": "model:" + name,
+            "kind": "uses_model",
+            "tokens": agg["tokens"],
+            "cost": agg["cost"],
+        }
+        for (tc, name), agg in sorted(model_weights.items())
+    ]
+    return task_classes, skills, models, edges
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -296,14 +369,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         Every list here is a direct, small projection of an existing
         `acr.dashboard.queries` read: memory node clusters (type + count),
         recent tasks (state pulses), recent agent spawns (topology), and the
-        raw event feed (token/activity flow). The frontend polls this on an
-        interval rather than the server pushing over a websocket — simplest
-        thing that's still genuinely live, no new transport to maintain.
+        raw event feed (token/activity flow). `task_classes`/`skills`/
+        `models`/`edges` are a real relationship graph derived from the same
+        `agent_records` rows plus `usage_by_provider()` — see
+        `_topology_graph()` for exactly which real facts become which
+        edges. The frontend polls this on an interval rather than the
+        server pushing over a websocket — simplest thing that's still
+        genuinely live, no new transport to maintain.
         """
         memory_counts = await queries.memory_type_counts(session)
         tasks = await queries.recent_tasks(session, limit=15)
         agent_records = await queries.recent_topology(session, limit=15)
         events = await queries.recent_events(session, limit=40)
+        usage = await usage_by_provider(session, build_default_router(settings).profiles)
+        task_classes, skills, models, edges = _topology_graph(agent_records, usage)
         return {
             "memory_types": [
                 {"type": type_, "count": count} for type_, count in memory_counts.items()
@@ -336,6 +415,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 }
                 for e in events
             ],
+            "task_classes": task_classes,
+            "skills": skills,
+            "models": models,
+            "edges": edges,
         }
 
     return app

@@ -1902,6 +1902,93 @@ app (see "What's left" below) — a much larger, separately-scoped
 undertaking by explicit prior user decision, not something folded into
 this pass.
 
+### Property-based testing: two real bugs found by generated input (2026-07-29)
+
+Research into testing formats beyond example-based unit tests (the only
+kind this repo had until now): property-based testing (Hypothesis is the
+dominant Python library, mature enough that CPython itself uses it) and
+mutation testing (mutmut, ~88% mutant-detection rate in recent
+benchmarks, the most actively maintained tool) are the two techniques
+that actually measure something example-based tests can't --
+property-based testing checks an invariant against generated inputs
+instead of the handful a human thought to write down, and mutation
+testing checks whether existing tests would even *notice* a real bug
+(coverage only proves a line executed, not that anything asserted on the
+result). One cited finding made the priority order obvious: each
+property-based test found roughly 50x as many mutations as the average
+example-based unit test in the study that measured it -- write the
+generative tests first, since they're both more likely to catch a real
+bug directly and to make mutation testing's own signal less noisy
+afterward.
+
+Added `hypothesis` as a dev dependency and wrote property tests for four
+functions chosen specifically because they have a checkable invariant
+that matters (a security guarantee, a documented bound, a monotonicity
+property a caller relies on) rather than adding them everywhere:
+`acr.core.fts_query.bm25_to_relevance()` (must always return a finite
+value in the documented (0, 1) bound, for any float), `acr.core.fts_query
+.tokenize()`/`build_match_query()` (a token must never contain the
+quote character it's about to be wrapped in — the actual invariant that
+makes the query builder's own escaping safe), `acr.core.tokens
+.estimate_tokens()` (always a positive integer; monotonic in input
+length — every caller that reasons about text growing/shrinking depends
+on this), and `acr.backup._safe_target()` (for adversarial generated
+path strings shaped like real zip-slip attempts, either raise
+`UnsafeArchiveMemberError` or return a path genuinely inside
+`target_dir` — never a silent third outcome).
+
+This immediately found two real, previously-uncaught bugs in
+`bm25_to_relevance()` — not example-based tests missing a case someone
+forgot to write, but domain violations no one had thought to write an
+example for at all:
+
+- **`rank=1.0` raised `ZeroDivisionError`.** The function's own docstring
+  assumes `bm25()`'s real `<=0` contract; a positive `rank` was never
+  handled. Both real call sites (`memory/retrieval.py`,
+  `skills/routing.py`) only ever pass an actual `bm25()` result through,
+  so this was never reachable in production — but a crash on any
+  contract violation, however unlikely, is still a real defect, not a
+  theoretical one to leave alone.
+- **`rank=1.5` silently returned `3.0`** — outside the documented open
+  interval `(0, 1)`, with no error and no signal anything was wrong,
+  arguably worse than the crash above since a caller would have no
+  reason to suspect the number was wrong.
+- Hypothesis then found a *third*, more subtle case on the very next run
+  after fixing the first two: an astronomically large-magnitude `rank`
+  (`-9,942,258,759,215,308.0` — nowhere near anything a real corpus
+  could produce, but still a valid `float`) rounded to exactly `1.0`
+  once `1.0 + strength` lost floating-point precision against `strength`
+  itself — landing exactly on the boundary the "(0, 1)" open interval
+  explicitly excludes.
+
+Fixed properly rather than loosening the test to match reality: a
+`rank >= 0` guard (returns `0.0`, "no meaningful match", instead of
+crashing or exceeding the bound) plus an explicit clamp to
+`math.nextafter(1.0, 0.0)` (the largest representable float under 1.0)
+so the documented bound is a real guarantee for every possible float
+input, not just the realistic ones. All three findings are locked in as
+plain example tests (`rank=1.0`, `rank=1.5`, and the extreme-magnitude
+case) alongside the property tests that found them, so a future
+refactor that reintroduces any of the three fails immediately without
+needing Hypothesis to re-discover it.
+
+`_safe_target()`'s property test (adversarial generated paths mixing
+normal segments with `..`/`.` traversal components, sometimes with a
+leading `/` or Windows drive prefix) found no new issue — real
+confirmation that the zip-slip protection audited manually earlier
+tonight holds against a much wider input space than the two hand-written
+traversal shapes already covered, not just an assumption based on
+reading the code.
+
+**Mutation testing was evaluated but not run**: `mutmut` refuses to run
+natively on Windows (this project's actual dev platform), requiring
+WSL. Setting up a working Python environment inside WSL purely to run a
+secondary, confirmatory technique — after property-based testing had
+already delivered concrete, real bug fixes directly on this platform —
+wasn't worth the detour. Removed the dependency after confirming it
+couldn't be used rather than leaving an aspirational, never-actually-run
+dev dependency in `pyproject.toml`.
+
 ## What's left
 
 Every phase in the master spec's 15-phase list (§65-66) now has a

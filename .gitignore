@@ -17,6 +17,7 @@ dist/
 .pyright/
 .coverage
 htmlcov/
+.hypothesis/
 
 # Local data (SQLite DB, logs) — never commit runtime state
 /data/

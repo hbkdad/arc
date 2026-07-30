@@ -11,6 +11,7 @@ free-text queries behave the same way everywhere in ACR.
 
 from __future__ import annotations
 
+import math
 import re
 
 _TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_]+")
@@ -108,6 +109,23 @@ def bm25_to_relevance(rank: float) -> float:
     few hundred rows — worth remembering if this function's shape ever looks
     like it needs "simplifying" back to that.) Flipping the sign first keeps
     this monotonic and bounded regardless of corpus size.
+
+    A caller passing a positive `rank` violates the `bm25()` <=0 contract
+    this docstring assumes -- found by a property-based test, not a real
+    caller (both real call sites pass an actual `bm25()` result straight
+    through). Treated as "no meaningful match" rather than left to blow up
+    the bounded-(0,1) promise: `rank` exactly 1.0 divides by zero, and any
+    `rank` > 1.0 produces a result *outside* (0, 1) instead of the documented
+    bound (e.g. `rank=1.5` returned `3.0` before this guard existed).
+
+    Also found by the same property test: an astronomically large-magnitude
+    `rank` (far past anything a real `bm25()` corpus could produce, but
+    still a `float` a caller could pass) rounds to exactly `1.0` once
+    `1.0 + strength` loses precision against `strength` itself -- clamped
+    below the largest representable float under 1.0 so "(0, 1)" stays a
+    real guarantee, not just true for realistic inputs.
     """
+    if rank >= 0:
+        return 0.0
     strength = -rank
-    return max(0.0, strength / (1.0 + strength))
+    return min(max(0.0, strength / (1.0 + strength)), math.nextafter(1.0, 0.0))

@@ -8,12 +8,15 @@ import zipfile
 from pathlib import Path
 
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
 from acr.backup import (
     MANIFEST_NAME,
     BackupIntegrityError,
     RestoreTargetNotEmptyError,
     UnsafeArchiveMemberError,
+    _safe_target,
     create_backup,
     restore_backup,
 )
@@ -177,3 +180,56 @@ def test_restore_backup_rejects_an_absolute_path_manifest_entry(tmp_path: Path) 
     assert not (tmp_path / "outside-target.txt").exists()
 
     assert not (tmp_path / "evil.txt").exists()
+
+
+# A manifest `path` entry, adversarial-shaped: normal segments mixed with
+# ".."/"." traversal components, sometimes joined with a leading "/" or a
+# Windows drive prefix -- the actual shape a hand-crafted malicious zip's
+# manifest could plausibly take, not fully arbitrary Unicode (which would
+# mostly just exercise pathlib's own string handling, not the traversal
+# threat model this function exists to defend against).
+_PATH_SEGMENT = st.one_of(
+    st.text(
+        alphabet=st.characters(whitelist_categories=("Ll", "Lu", "Nd")), min_size=1, max_size=8
+    ),
+    st.just(".."),
+    st.just("."),
+)
+_ADVERSARIAL_REL_PATH = st.builds(
+    lambda segments, leading_slash, drive: (
+        ("/" if leading_slash else "") + (drive or "") + "/".join(segments)
+    ),
+    segments=st.lists(_PATH_SEGMENT, min_size=1, max_size=6),
+    leading_slash=st.booleans(),
+    drive=st.one_of(st.none(), st.just("C:"), st.just("C:/")),
+)
+
+
+@settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(_ADVERSARIAL_REL_PATH)
+def test_safe_target_never_returns_a_path_outside_target_dir(tmp_path: Path, rel_path: str) -> None:
+    """The actual security property `_safe_target()` exists to guarantee,
+    checked against generated adversarial paths rather than the handful of
+    hand-written traversal shapes above: for *any* input, either it raises
+    `UnsafeArchiveMemberError`, or the path it returns is genuinely inside
+    `target_dir` -- never a silent third outcome.
+
+    `target_dir` is shared (mkdir(exist_ok=True), not a fresh dir) across
+    every generated example within one `tmp_path` -- deliberately safe
+    here since the property under test is pure path-containment math with
+    no dependency on the directory actually being empty."""
+    target_dir = tmp_path / "restore_target"
+    target_dir.mkdir(exist_ok=True)
+
+    try:
+        result = _safe_target(target_dir, rel_path)
+    except UnsafeArchiveMemberError:
+        return  # correctly refused -- the property holds
+    except (OSError, ValueError):
+        # A small number of generated strings aren't valid filesystem
+        # paths at all on this OS (e.g. a bare ":" on Windows) -- pathlib
+        # itself rejects those before _safe_target()'s own check runs;
+        # that's a real path-validity error, not an escape.
+        return
+
+    assert result.is_relative_to(target_dir.resolve())

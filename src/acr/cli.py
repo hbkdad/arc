@@ -88,6 +88,8 @@ from acr.learning.skill_generation import (
     generate_candidate_skill,
 )
 from acr.logging import configure_logging, get_logger
+from acr.memory.git_ingest import GitCommandError, record_commit_as_decision
+from acr.memory.models import MemoryRecord
 from acr.memory.write_controller import WriteEvaluation
 from acr.providers.base import CompletionRequest
 from acr.providers.mock import MockProvider
@@ -1686,6 +1688,34 @@ def memory_calibration(
         f"{report.records_considered} record(s) considered, "
         f"{report.records_excluded_no_evidence} excluded (no recorded uses)"
     )
+
+
+@memory_app.command("record-commit")
+def memory_record_commit(
+    rev: str = typer.Argument(
+        "HEAD", help="Git revision to record (default: HEAD, i.e. the most recent commit)."
+    ),
+) -> None:
+    """Turn a real git commit's own message into a DECISION memory --
+    zero manual step, the actual mechanism `.githooks/post-commit` calls
+    automatically after every commit to this repo. Re-running for a
+    commit that's already been recorded is a real no-op (subject is keyed
+    on the commit's own sha), not a duplicate entry."""
+    settings = get_settings()
+
+    async def _record() -> tuple[WriteEvaluation, MemoryRecord | None]:
+        async with session_scope(settings) as session:
+            evaluation, record = await record_commit_as_decision(session, rev)
+            await session.commit()
+            return evaluation, record
+
+    try:
+        evaluation, _ = asyncio.run(_record())
+    except GitCommandError as exc:
+        typer.echo(f"git error: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(f"{evaluation.decision.value}: {evaluation.reason}")
 
 
 if __name__ == "__main__":

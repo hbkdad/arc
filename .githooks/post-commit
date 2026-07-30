@@ -1,0 +1,13 @@
+#!/bin/sh
+# Automatically records this commit as a real DECISION memory in ACR's
+# own store -- zero manual step, matching ACR's own design (a self-
+# evolving system shouldn't need a human to remember to write down what
+# it decided). See src/acr/memory/git_ingest.py and
+# docs/ARCHITECTURE.md's "Automatic git-commit memory capture" section.
+#
+# Enabled per-clone via `git config core.hooksPath .githooks` (see
+# CONTRIBUTING.md) -- git doesn't read hooks from a tracked directory by
+# default. A post-commit hook runs *after* the commit already succeeded,
+# so a failure here (uv not on PATH, dependencies not yet installed on a
+# brand new clone) is surfaced but never blocks or undoes the commit.
+uv run acr memory record-commit HEAD

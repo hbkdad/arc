@@ -1088,6 +1088,7 @@ uv run acr learn self-practice [--limit N --min-quality-tier N]   # run each act
 uv run acr memory gc-plan [--superseded/quarantined/stale-candidate-*-days N]  # dry run
 uv run acr memory gc-apply [same flags]      # re-plans and archives every eligible record
 uv run acr memory calibration [--min-uses N] # does stored confidence predict outcomes?
+uv run acr memory record-commit [rev]        # a real git commit -> a DECISION memory; .githooks/post-commit calls this automatically
 uv run acr backup create [--output PATH]     # zip + SHA-256 manifest of the data dir
 uv run acr backup restore <archive> --target-dir PATH [--force]
 uv run acr models usage                      # real per-provider calls/tokens/estimated cost
@@ -1988,6 +1989,48 @@ already delivered concrete, real bug fixes directly on this platform —
 wasn't worth the detour. Removed the dependency after confirming it
 couldn't be used rather than leaving an aspirational, never-actually-run
 dev dependency in `pyproject.toml`.
+
+### Automatic git-commit memory capture (2026-07-29)
+
+Every DECISION/FAILURE memory recorded in the sections above this one
+tonight was written by a one-off Python script run by hand after the
+fact -- a real gap, called out directly: a system whose whole premise is
+being self-evolving and automated shouldn't depend on a human (or an AI
+assistant acting as one) remembering to hand-write a memory record once
+the work is done. That's not part of ACR's own learning loop at all --
+it's a separate, unautomated thing layered on top of it.
+
+Worth being precise about the distinction, since it's easy to conflate
+the two: ACR's actual runtime learning loop *is* already fully
+automatic and requires no fix -- `spawn_agent()` calls
+`record_skill_outcome()`/`record_topology()` on every real spawn,
+`context.attribution` updates memory usage stats on every real
+retrieval, `self_practice` grows evidence on a schedule. Zero manual
+steps, and it was already working correctly before tonight. What was
+missing was automatic capture of a different class of fact entirely:
+decisions and failures from *developing ACR itself* -- something ACR's
+own runtime has no way to observe, because it isn't live user traffic
+ACR is processing.
+
+The fix: `src/acr/memory/git_ingest.py`'s `record_commit_as_decision()`
+reads a real commit's own message (`git log`, never fabricated) and
+stores it as a real `MemoryType.DECISION` record via the same
+`remember_decision()` every other DECISION memory in this file already
+goes through -- `remember()`'s own duplicate detection (same type/scope/
+subject, identical content -> `WriteDecision.IGNORE`) makes re-running
+this for an already-recorded commit a real no-op for free, not
+something `git_ingest.py` had to reinvent. `acr memory record-commit
+[rev]` (default `HEAD`) is the CLI surface; `.githooks/post-commit`
+calls it automatically after every real commit to this repo, enabled
+per-clone via `git config core.hooksPath .githooks` (one-time, see
+`CONTRIBUTING.md`) since git doesn't read hooks from a tracked directory
+by default. A post-commit hook runs *after* the commit already
+succeeded, so it can never block or undo one -- a failure (uv not on
+PATH, a fresh clone before `uv sync`) is surfaced, not destructive.
+
+This repo's own `core.hooksPath` was configured as part of landing this
+change, so every commit from this one onward is captured with no further
+action from anyone.
 
 ## What's left
 

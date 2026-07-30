@@ -1,0 +1,7 @@
+# Shell scripts must stay LF -- a CRLF shebang line breaks execution on
+# real Unix shells (macOS/Linux contributors), even though Windows'
+# git-for-windows bash is often forgiving of it. Without this, a
+# Windows checkout with core.autocrlf=true would silently convert
+# .githooks/post-commit to CRLF and break it for everyone else who
+# clones after that.
+.githooks/* text eol=lf

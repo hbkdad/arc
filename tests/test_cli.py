@@ -1054,3 +1054,79 @@ def test_memory_calibration_reports_a_real_bin_and_brier_score(migrated_settings
     assert "mean_confidence=0.90" in result.stdout
     assert "empirical_success_rate=0.90" in result.stdout
     assert "brier_score=0.0000" in result.stdout
+
+
+def _init_throwaway_repo_with_one_commit(repo: Path, *, subject: str, body: str) -> None:
+    import subprocess
+
+    def run(args: list[str]) -> None:
+        subprocess.run(args, cwd=repo, check=True, capture_output=True, text=True)
+
+    repo.mkdir()
+    run(["git", "init"])
+    run(["git", "config", "user.email", "test@example.com"])
+    run(["git", "config", "user.name", "Test"])
+    (repo / "README.md").write_text("hello\n", encoding="utf-8")
+    run(["git", "add", "README.md"])
+    run(["git", "commit", "-m", f"{subject}\n\n{body}"])
+
+
+def test_memory_record_commit_stores_a_real_decision_from_head(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    repo = tmp_path / "throwaway-repo"
+    _init_throwaway_repo_with_one_commit(repo, subject="Fix the thing", body="Root cause was X.")
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("ACR_DATA_DIR", str(repo / "data"))
+    from acr.config import get_settings
+
+    get_settings.cache_clear()
+    runner.invoke(app, ["db", "upgrade"])
+
+    result = runner.invoke(app, ["memory", "record-commit", "HEAD"])
+
+    assert result.exit_code == 0
+    assert "store_" in result.stdout
+
+    get_settings.cache_clear()
+
+
+def test_memory_record_commit_is_a_no_op_the_second_time(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    repo = tmp_path / "throwaway-repo"
+    _init_throwaway_repo_with_one_commit(repo, subject="Fix the thing", body="Because Y.")
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("ACR_DATA_DIR", str(repo / "data"))
+    from acr.config import get_settings
+
+    get_settings.cache_clear()
+    runner.invoke(app, ["db", "upgrade"])
+
+    runner.invoke(app, ["memory", "record-commit", "HEAD"])
+    result = runner.invoke(app, ["memory", "record-commit", "HEAD"])
+
+    assert result.exit_code == 0
+    assert "ignore" in result.stdout
+    assert "duplicate" in result.stdout
+
+    get_settings.cache_clear()
+
+
+def test_memory_record_commit_reports_a_clean_error_for_a_bad_revision(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    repo = tmp_path / "throwaway-repo"
+    _init_throwaway_repo_with_one_commit(repo, subject="Fix the thing", body="")
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("ACR_DATA_DIR", str(repo / "data"))
+    from acr.config import get_settings
+
+    get_settings.cache_clear()
+
+    result = runner.invoke(app, ["memory", "record-commit", "not-a-real-revision"])
+
+    assert result.exit_code == 1
+    assert "git error" in result.stdout
+
+    get_settings.cache_clear()

@@ -1,6 +1,12 @@
 """Memory system (master §473-629): schema, hybrid retrieval, temporal
 queries, and write control."""
 
+from acr.memory.git_ingest import (
+    CommitInfo,
+    GitCommandError,
+    read_commit,
+    record_commit_as_decision,
+)
 from acr.memory.models import MemoryRecord, MemoryScope, MemoryStatus, MemoryType
 from acr.memory.retrieval import RetrievedMemory, retrieve
 from acr.memory.schemas import (
@@ -21,8 +27,10 @@ from acr.memory.write_controller import (
 )
 
 __all__ = [
+    "CommitInfo",
     "DecisionPayload",
     "FailurePayload",
+    "GitCommandError",
     "MemoryCandidate",
     "MemoryRecord",
     "MemoryScope",
@@ -35,6 +43,8 @@ __all__ = [
     "evaluate",
     "parse_decision_payload",
     "parse_failure_payload",
+    "read_commit",
+    "record_commit_as_decision",
     "remember",
     "remember_decision",
     "remember_failure",

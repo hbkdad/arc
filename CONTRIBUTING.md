@@ -3,11 +3,24 @@
 ## Setup
 
 ```bash
-uv sync                 # install deps + local package into .venv
-cp .env.example .env    # local dev data dir (repo-local ./data, gitignored)
+uv sync                       # install deps + local package into .venv
+cp .env.example .env          # local dev data dir (repo-local ./data, gitignored)
 uv run alembic upgrade head
 uv run acr doctor
+git config core.hooksPath .githooks   # every commit auto-records itself as a real DECISION memory -- see below
 ```
+
+The last step is a one-time, per-clone opt-in (git doesn't read hooks
+from a tracked directory by default). Once set, `.githooks/post-commit`
+runs `acr memory record-commit HEAD` after every real commit, turning
+the commit's own message into a `MemoryType.DECISION` record with zero
+manual step — see `src/acr/memory/git_ingest.py` and
+`docs/ARCHITECTURE.md`'s "Automatic git-commit memory capture" section
+for why. A post-commit hook can't block or undo the commit it runs
+after, so skipping this step (or a hook failure on a fresh clone before
+`uv sync` has run) is harmless either way — just means that commit isn't
+remembered until you configure it or re-run `acr memory record-commit
+<sha>` by hand.
 
 ## Before opening a PR
 

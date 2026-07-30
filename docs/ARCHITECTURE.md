@@ -1851,6 +1851,57 @@ show any Claude usage."
   This session's own Claude Code conversation is a separate system from
   ACR's routing ladder and was never going to appear here regardless.
 
+### `acr setup`: the closest thing to "click and install" a local CLI has (2026-07-29)
+
+Direct follow-up to the above: installation was already one command
+(`pip install acr-runtime` / `uv tool install acr-runtime`, live on PyPI
+since `v0.1.0`), but getting a cloud provider working meant manually
+editing `.env` — a real friction point for a new user, and not
+something worth pretending is scriptable away. An API key can only be
+supplied by its owner; no tool, including this one, should try to make
+that step disappear (a shared/default key would be a severe security
+anti-pattern, and there's no OAuth-style device-flow equivalent for
+Anthropic/OpenAI API keys the way `gh auth login` has for GitHub). What
+*is* real friction, and genuinely automatable, is everything around that
+one manual step: creating `.env`, knowing which variables exist, typing
+them in correctly, and confirming it worked afterward.
+
+`acr setup` is an interactive wizard that does exactly that: creates
+`.env` from `.env.example` if missing (leaves an existing one alone),
+offers to configure Anthropic/OpenAI one at a time (skippable, each with
+a link to where to get a key), offers to set
+`ACR_DEFAULT_MIN_QUALITY_TIER=2` once a provider is configured, then
+re-runs `acr doctor`'s own checks in a fresh process to confirm it
+actually worked (`.env` is only read at process startup, so the wizard's
+own process can't just check its own in-memory state). Every value typed
+is written only to the local `.env`; the command has no network code
+path of its own.
+
+Building this surfaced a real bug during live testing (not caught by the
+unit tests, which use Click's `CliRunner` — more on why below):
+`typer.prompt(hide_input=True)` reads via the OS's own masked-input
+mechanism, which expects a real console. Piped or non-interactive stdin
+(a real user scripting the install, `acr setup` run inside CI or another
+tool, or this session's own subprocess smoke test) has no console for
+that mechanism to read from — it hangs forever waiting for keystrokes
+that will never arrive, with no error and no timeout. Confirmed directly
+by running `printf "y\nkey\n..." | acr setup` in a real subprocess: the
+pre-fix version hung indefinitely; `CliRunner`'s tests all passed anyway
+because Click's test runner patches the masked-input path specifically
+to make it testable, which is exactly why the hang wasn't visible from
+unit tests alone and needed a real subprocess run to catch. Fixed with a
+`sys.stdin.isatty()` guard: masked input only when actually attached to
+a real terminal, otherwise a plain (visibly echoed, clearly disclosed
+via an on-screen warning) prompt instead of an indefinite hang. The
+regression test for this documents the real subprocess reproduction
+rather than just asserting the code path taken, since the original bug
+was invisible to `CliRunner` by construction.
+
+A literal one-click GUI installer is the already-deferred Tauri desktop
+app (see "What's left" below) — a much larger, separately-scoped
+undertaking by explicit prior user decision, not something folded into
+this pass.
+
 ## What's left
 
 Every phase in the master spec's 15-phase list (§65-66) now has a

@@ -69,6 +69,130 @@ def test_doctor_command_succeeds_in_isolated_env(
     get_settings.cache_clear()
 
 
+def _isolated_setup_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`acr setup` reads/writes `.env` relative to CWD (same as pydantic-
+    settings' own `env_file=".env"`) -- chdir into a scratch dir so a test
+    never touches this repo's real `.env`."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ACR_DATA_DIR", str(tmp_path / "data"))
+    from acr.config import get_settings
+
+    get_settings.cache_clear()
+
+
+def test_setup_creates_env_file_when_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _isolated_setup_env(monkeypatch, tmp_path)
+
+    result = runner.invoke(app, ["setup"], input="n\nn\n")
+
+    assert result.exit_code == 0
+    assert (tmp_path / ".env").exists()
+    assert "created" in result.stdout
+    assert "provider_mock" in result.stdout  # the final re-check ran
+
+    from acr.config import get_settings
+
+    get_settings.cache_clear()
+
+
+def test_setup_does_not_overwrite_an_existing_env_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _isolated_setup_env(monkeypatch, tmp_path)
+    (tmp_path / ".env").write_text("ACR_LOG_LEVEL=DEBUG\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["setup"], input="n\nn\n")
+
+    assert result.exit_code == 0
+    assert "found" in result.stdout
+    assert "ACR_LOG_LEVEL=DEBUG" in (tmp_path / ".env").read_text(encoding="utf-8")
+
+    from acr.config import get_settings
+
+    get_settings.cache_clear()
+
+
+def test_setup_writes_a_provided_anthropic_key_to_env_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _isolated_setup_env(monkeypatch, tmp_path)
+
+    result = runner.invoke(app, ["setup"], input="y\nsk-ant-test-key\nn\nn\n")
+
+    assert result.exit_code == 0
+    assert "ACR_ANTHROPIC_API_KEY=sk-ant-test-key" in (tmp_path / ".env").read_text(
+        encoding="utf-8"
+    )
+
+    from acr.config import get_settings
+
+    get_settings.cache_clear()
+
+
+def test_setup_skips_a_provider_already_configured_in_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _isolated_setup_env(monkeypatch, tmp_path)
+    (tmp_path / ".env").write_text("ACR_ANTHROPIC_API_KEY=already-set\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["setup"], input="n\nn\n")
+
+    assert result.exit_code == 0
+    assert "Anthropic (Claude): already configured" in result.stdout
+    # Never re-prompted for it, and the original value is untouched.
+    assert "ACR_ANTHROPIC_API_KEY=already-set" in (tmp_path / ".env").read_text(encoding="utf-8")
+
+    from acr.config import get_settings
+
+    get_settings.cache_clear()
+
+
+def test_setup_offers_default_min_quality_tier_after_configuring_a_provider(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _isolated_setup_env(monkeypatch, tmp_path)
+
+    result = runner.invoke(app, ["setup"], input="y\nsk-ant-test-key\nn\ny\n")
+
+    assert result.exit_code == 0
+    assert "ACR_DEFAULT_MIN_QUALITY_TIER=2" in (tmp_path / ".env").read_text(encoding="utf-8")
+
+    from acr.config import get_settings
+
+    get_settings.cache_clear()
+
+
+def test_setup_falls_back_to_visible_input_over_piped_stdin_instead_of_hanging(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # hide_input=True reads via the OS's own masked-input mechanism, which
+    # expects a real console -- piped/non-interactive stdin (exactly what
+    # CliRunner simulates, and what a real user gets from CI, a script, or
+    # this command run inside another tool) has no console for it to read
+    # from and would otherwise hang forever waiting for keystrokes that
+    # never arrive. Confirmed against a real (non-CliRunner) subprocess
+    # with piped stdin during development: the pre-fix version hung
+    # indefinitely here; this locks in the isatty() guard that prevents
+    # it. The key legitimately appears in this transcript because the
+    # fallback is disclosed, visible input, not a masking bug -- that's
+    # the correct tradeoff for a non-interactive session, not a leak.
+    _isolated_setup_env(monkeypatch, tmp_path)
+
+    result = runner.invoke(app, ["setup"], input="y\nsk-ant-secret-value\nn\nn\n")
+
+    assert result.exit_code == 0
+    assert "non-interactive input detected" in result.stdout
+    assert "ACR_ANTHROPIC_API_KEY=sk-ant-secret-value" in (tmp_path / ".env").read_text(
+        encoding="utf-8"
+    )
+
+    from acr.config import get_settings
+
+    get_settings.cache_clear()
+
+
 def test_db_upgrade_applies_migrations_from_scratch(settings: Settings) -> None:
     # Deliberately uses `settings`, not `migrated_settings` -- the whole
     # point is proving `acr db upgrade` creates a real schema via Alembic

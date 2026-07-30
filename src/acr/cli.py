@@ -9,6 +9,7 @@ docs/ARCHITECTURE.md's command reference for the full, current list.
 from __future__ import annotations
 
 import asyncio
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -205,6 +206,94 @@ def doctor() -> None:
             exit_code = 1
 
     raise typer.Exit(code=exit_code)
+
+
+@app.command()
+def setup() -> None:
+    """Interactive first-run wizard: create .env if missing, optionally
+    configure cloud provider API keys, then re-run doctor to confirm.
+
+    Installation is already one command (`pip install acr-runtime` /
+    `uv tool install acr-runtime`); this covers the one part that can't
+    be scripted away without a real security downside -- an API key only
+    its owner can supply. Every key you enter here is typed directly into
+    *your own* terminal (masked when run in a real interactive terminal)
+    and written only to your local .env; this command never transmits it
+    anywhere. Skip any provider you don't want -- ACR runs fully
+    local-first with none of them configured (master principle #2:
+    cloud-optional)."""
+    env_path = Path(".env")
+    if not env_path.exists():
+        example = Path(".env.example")
+        env_path.write_text(
+            example.read_text(encoding="utf-8") if example.exists() else "",
+            encoding="utf-8",
+        )
+        typer.echo(f"created {env_path.resolve()}")
+    else:
+        typer.echo(f"found {env_path.resolve()}")
+
+    existing = env_path.read_text(encoding="utf-8")
+
+    def has_var(var: str) -> bool:
+        for line in existing.splitlines():
+            stripped = line.strip()
+            if stripped.startswith(f"{var}=") and stripped[len(var) + 1 :]:
+                return True
+        return False
+
+    def append_var(var: str, value: str) -> None:
+        nonlocal existing
+        with env_path.open("a", encoding="utf-8") as f:
+            f.write(f"\n{var}={value}\n")
+        existing += f"\n{var}={value}\n"
+
+    def configure_provider(var: str, label: str, console_url: str) -> None:
+        if has_var(var):
+            typer.echo(f"{label}: already configured in .env, skipping")
+            return
+        if not typer.confirm(f"Configure {label}? (get a key at {console_url})", default=False):
+            typer.echo(f"{label}: skipped -- ACR runs fully local-first without it")
+            return
+        # hide_input=True reads via the OS's own masked-input mechanism
+        # (getpass), which expects a real console -- piped/non-interactive
+        # stdin (scripted setup, CI, this command run inside another tool)
+        # has no console for it to read from and hangs forever waiting for
+        # keystrokes that will never come, rather than erroring. Only take
+        # that path when stdin is actually a terminal; otherwise read
+        # plainly (unmasked, but functional) and say so up front.
+        if sys.stdin.isatty():
+            key = typer.prompt(f"{label} API key", hide_input=True).strip()
+        else:
+            typer.echo("(non-interactive input detected -- the key won't be masked as you type)")
+            key = typer.prompt(f"{label} API key").strip()
+        if not key:
+            typer.echo(f"{label}: empty input, skipping")
+            return
+        append_var(var, key)
+        typer.echo(f"{label}: written to .env")
+
+    configure_provider(
+        "ACR_ANTHROPIC_API_KEY", "Anthropic (Claude)", "https://console.anthropic.com/settings/keys"
+    )
+    configure_provider("ACR_OPENAI_API_KEY", "OpenAI", "https://platform.openai.com/api-keys")
+
+    cloud_configured = has_var("ACR_ANTHROPIC_API_KEY") or has_var("ACR_OPENAI_API_KEY")
+    ask_default_tier = cloud_configured and not has_var("ACR_DEFAULT_MIN_QUALITY_TIER")
+    if ask_default_tier and typer.confirm(
+        "Route `acr run`/MCP `run_task` through a configured provider by "
+        "default instead of only the free mock/Ollama tiers? "
+        "(--min-quality-tier still overrides this per-call either way)",
+        default=False,
+    ):
+        append_var("ACR_DEFAULT_MIN_QUALITY_TIER", "2")
+        typer.echo("default_min_quality_tier: set to 2 in .env")
+
+    typer.echo("\nre-checking (a fresh process, since .env is only read at startup)...")
+    settings = get_settings()
+    results = asyncio.run(run_checks(settings))
+    for result in results:
+        typer.echo(f"{_STATUS_SYMBOL[result.status]} {result.name}: {result.detail}")
 
 
 @app.command()

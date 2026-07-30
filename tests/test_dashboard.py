@@ -325,6 +325,135 @@ async def test_api_graph_is_empty_but_valid_with_no_data(migrated_settings: Sett
     assert body == {"memory_types": [], "tasks": [], "agents": [], "events": []}
 
 
+async def test_overview_page_renders_activity_sparkline_charts(
+    migrated_settings: Settings, db_session: AsyncSession
+) -> None:
+    await run_task(db_session, "say hello", MockProvider(), TelemetryRecorder())
+
+    response = _client(migrated_settings).get("/")
+
+    assert response.status_code == 200
+    assert 'id="chart-tasks-hourly"' in response.text
+    assert 'id="chart-events-hourly"' in response.text
+    assert "tasks-per-hour-data" in response.text
+
+
+async def test_memory_page_renders_type_chart_and_calibration_section(
+    migrated_settings: Settings, db_session: AsyncSession
+) -> None:
+    await remember(
+        db_session,
+        MemoryCandidate(
+            type=MemoryType.SEMANTIC,
+            scope=MemoryScope.PROJECT,
+            subject="acr.dashboard.chart-test",
+            content="a memory record for the type-chart test",
+            source_type="session",
+            confidence=0.9,
+            evidence="observed directly",
+        ),
+    )
+    await db_session.commit()
+
+    response = _client(migrated_settings).get("/memory")
+
+    assert response.status_code == 200
+    assert 'id="chart-memory-types"' in response.text
+    assert "Confidence calibration" in response.text
+    assert 'id="chart-calibration"' in response.text
+    # No record has any recorded successful/failed use yet -- the
+    # empty-calibration branch, not a fabricated reliability curve.
+    assert "0 record(s) considered" in response.text
+
+
+async def test_memory_page_calibration_reflects_real_recorded_outcomes(
+    migrated_settings: Settings, db_session: AsyncSession
+) -> None:
+    _evaluation, record = await remember(
+        db_session,
+        MemoryCandidate(
+            type=MemoryType.SEMANTIC,
+            scope=MemoryScope.PROJECT,
+            subject="acr.dashboard.calibration-test",
+            content="a memory record with real recorded outcomes",
+            source_type="session",
+            confidence=0.9,
+            evidence="observed directly",
+        ),
+    )
+    assert record is not None
+    record.successful_uses = 4
+    record.failed_uses = 1
+    await db_session.commit()
+
+    response = _client(migrated_settings).get("/memory")
+
+    assert response.status_code == 200
+    assert "1 record(s) considered" in response.text
+    assert "Brier score" in response.text
+
+
+async def test_routing_page_renders_usage_charts_after_a_task(
+    migrated_settings: Settings, db_session: AsyncSession
+) -> None:
+    await run_task(db_session, "say hello", MockProvider(), TelemetryRecorder())
+
+    response = _client(migrated_settings).get("/routing")
+
+    assert response.status_code == 200
+    assert 'id="chart-usage-calls"' in response.text
+    assert 'id="chart-usage-cost"' in response.text
+
+
+async def test_visualization_page_renders_the_view_toggle_and_timeline_canvas(
+    migrated_settings: Settings,
+) -> None:
+    response = _client(migrated_settings).get("/visualization")
+
+    assert response.status_code == 200
+    assert 'id="view-graph"' in response.text
+    assert 'id="view-timeline"' in response.text
+    assert '<canvas id="timeline"' in response.text
+
+
+async def test_api_graph_tasks_include_created_at_for_the_timeline_view(
+    migrated_settings: Settings, db_session: AsyncSession
+) -> None:
+    await run_task(db_session, "say hello", MockProvider(), TelemetryRecorder())
+
+    response = _client(migrated_settings).get("/api/graph")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["tasks"]
+    for task in body["tasks"]:
+        assert "created_at" in task
+        assert "updated_at" in task
+
+
+async def test_charts_js_static_asset_is_served(migrated_settings: Settings) -> None:
+    response = _client(migrated_settings).get("/static/charts.js")
+
+    assert response.status_code == 200
+    assert "ACRCharts" in response.text
+
+
+async def test_charts_js_loads_before_page_content_that_calls_it(
+    migrated_settings: Settings,
+) -> None:
+    # charts.js must appear before {% block content %} in base.html --
+    # every chart-rendering page has an inline <script> inside that block
+    # that calls ACRCharts.* synchronously at parse time, so loading the
+    # library after the content block (as tables.js does, safely, since
+    # it only reacts to already-rendered tables) would leave every chart
+    # blank with no error surfaced to the user.
+    response = _client(migrated_settings).get("/")
+
+    charts_pos = response.text.index('src="/static/charts.js"')
+    content_pos = response.text.index('id="chart-tasks-hourly"')
+    assert charts_pos < content_pos
+
+
 async def test_events_page_filters_by_event_type(
     migrated_settings: Settings, db_session: AsyncSession
 ) -> None:

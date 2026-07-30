@@ -44,4 +44,28 @@
 {% endfor %}
 </table>
 </div>
+
+{% if usage %}
+<div class="chart-grid">
+<div class="chart-card"><h3>Calls by provider</h3><div id="chart-usage-calls"></div></div>
+<div class="chart-card"><h3>Estimated cost by provider</h3><div id="chart-usage-cost"></div></div>
+</div>
+<script>
+(function () {
+  var calls = [
+    {% for u in usage %}
+    { label: "{{ u.provider }}", value: {{ u.call_count }} },
+    {% endfor %}
+  ];
+  var cost = [
+    {% for u in usage %}
+    { label: "{{ u.provider }}", value: {{ u.estimated_cost if u.estimated_cost is not none else 0 }},
+      formatted: "{{ "%.4f" | format(u.estimated_cost) if u.estimated_cost is not none else "—" }}" },
+    {% endfor %}
+  ];
+  ACRCharts.barChart(document.getElementById("chart-usage-calls"), calls);
+  ACRCharts.barChart(document.getElementById("chart-usage-cost"), cost);
+})();
+</script>
+{% endif %}
 {% endblock %}

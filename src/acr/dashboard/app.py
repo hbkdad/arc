@@ -31,6 +31,7 @@ from acr.config import Settings, get_settings
 from acr.dashboard import queries
 from acr.db.base import make_engine, make_session_factory
 from acr.doctor import run_checks
+from acr.evaluation.calibration import compute_calibration
 from acr.learning.proposals import ProposalStatus, list_proposals
 from acr.routing.models import ModelProfile, build_default_router
 from acr.security.audit import recent_audit_events
@@ -122,6 +123,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         checks = await run_checks(settings)
         task_counts = await queries.task_status_counts(session)
         event_counts = await queries.event_type_counts(session)
+        tasks_per_hour = await queries.tasks_created_per_hour(session)
+        events_per_hour = await queries.events_per_hour(session)
         return templates.TemplateResponse(
             request,
             "overview.html",
@@ -130,6 +133,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "checks": checks,
                 "task_counts": task_counts,
                 "event_counts": event_counts,
+                "tasks_per_hour": tasks_per_hour,
+                "events_per_hour": events_per_hour,
             },
         )
 
@@ -157,6 +162,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         type_counts = await queries.memory_type_counts(session)
         status_counts = await queries.memory_status_counts(session)
         rows = await queries.recent_memories(session)
+        calibration = await compute_calibration(session)
         return templates.TemplateResponse(
             request,
             "memory.html",
@@ -165,6 +171,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "type_counts": type_counts,
                 "status_counts": status_counts,
                 "records": rows,
+                "calibration": calibration,
             },
         )
 
@@ -306,6 +313,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "id": t.id,
                     "objective": t.objective,
                     "status": t.status.value,
+                    "created_at": t.created_at.isoformat(),
                     "updated_at": t.updated_at.isoformat(),
                 }
                 for t in tasks

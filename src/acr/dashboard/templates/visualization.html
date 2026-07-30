@@ -1,16 +1,28 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Cognitive graph</h1>
-<p class="lede">Live, polling <code>/api/graph</code> every 2s. Hover any shape for detail; drag a memory ring to pin it.</p>
-<div class="legend">
+<p class="lede">Live, polling <code>/api/graph</code> every 2s. The graph shows relationships; the timeline shows sequence and duration -- pick whichever question you're asking.</p>
+<div class="theme-toggle" role="group" aria-label="Visualization view" style="max-width: 260px; margin: 0 0 0.85rem;">
+  <button type="button" id="view-graph" aria-pressed="true">Graph</button>
+  <button type="button" id="view-timeline" aria-pressed="false">Timeline</button>
+</div>
+<div class="legend" id="legend-graph">
   <span class="item"><span class="swatch circle" style="background:var(--accent); width:14px; height:14px; border:2px solid var(--accent)"></span>core (pulses on new events)</span>
   <span class="item"><span class="swatch circle" style="background:var(--wire)"></span>memory cluster (size = count)</span>
   <span class="item"><span class="swatch" style="background:var(--info)"></span>task (color = status)</span>
   <span class="item"><span class="swatch diamond" style="background:var(--ok)"></span>agent spawn (color = succeeded)</span>
   <span class="item"><span class="swatch circle" style="background:var(--accent); width:6px; height:6px"></span>event timeline (newest on the right)</span>
 </div>
+<div class="legend" id="legend-timeline" style="display:none;">
+  <span class="item"><span class="swatch" style="background:var(--ink-dim)"></span>created</span>
+  <span class="item"><span class="swatch" style="background:var(--info)"></span>planning / executing / verifying</span>
+  <span class="item"><span class="swatch" style="background:var(--ok)"></span>completed</span>
+  <span class="item"><span class="swatch" style="background:var(--danger)"></span>failed</span>
+  <span class="item">bar length = time from creation to last update (or now, if still running)</span>
+</div>
 <div class="table-wrap" style="padding: 0.5rem;">
 <canvas id="graph" width="900" height="560" style="width:100%; max-width:900px; display:block; cursor:default;"></canvas>
+<canvas id="timeline" width="900" height="420" style="width:100%; max-width:900px; display:none; cursor:default;"></canvas>
 </div>
 <p id="graph-status" class="empty">connecting…</p>
 <script src="/static/visualization.js"></script>

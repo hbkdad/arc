@@ -1187,6 +1187,108 @@ every invocation. The zero-config out-of-box default (tier `0`, mock-only)
 is unchanged — this only affects a caller who's deliberately configured a
 preference.
 
+### Dashboard visual overhaul: charts + a real task timeline (2026-07-29)
+
+The node graph on `/visualization` was, by explicit user feedback, the
+only real *metric* surface on the dashboard, and it's built entirely out
+of circles — fine for showing relationships (that's what it was designed
+for), a poor fit for "how much," "how many," or "in what order." Research
+before touching anything: a competitive read of LLM-observability tooling
+(Portkey, MLflow, Langfuse) and Grafana's own panel taxonomy. The
+consistent finding — Langfuse's own answer to "beyond circles" is a real
+Gantt timeline for execution sequence plus line/bar charts for cost and
+latency, with a node/relationship graph kept as a secondary, opt-in view,
+never the primary metric surface. That's the shape this pass followed,
+not a redesign of the graph itself (its physics + hover/pin interactivity
+was already a considered, researched choice — see "Phase 12" above — and
+stays as-is).
+
+Still bound by the same constraint that shaped the graph in the first
+place: "the dashboard must remain useful without advanced graphics"
+(master §1240) — no charting library, no CDN script, no build step.
+Every new chart is hand-rolled, in a new `static/charts.js` shared across
+pages:
+
+- **`ACRCharts.barChart`** — horizontal bars (memory type counts, routing
+  usage/cost by provider).
+- **`ACRCharts.pairedBarChart`** — two bars per group with a shared
+  legend (confidence calibration: predicted vs. actual per bin).
+- **`ACRCharts.sparkline`** — a small inline SVG trend line with an area
+  fill (overview page: tasks/hour and events/hour over the last 24h).
+
+None of these are circles/donuts — a deliberate choice given the user's
+specific complaint, not just a style preference. Every color is a CSS
+custom property (`var(--accent)`, `var(--ok)`, ...) referenced through
+`chart-*` classes in `base.html`, not a hex value computed in JS, so an
+already-rendered chart re-themes for free on the theme toggle — no
+re-render needed, unlike the live canvas graph which recomputes theme()
+every frame anyway.
+
+New real data sources, no synthetic/random values anywhere:
+
+- `acr.dashboard.queries.tasks_created_per_hour()` /
+  `events_per_hour()` — real hourly counts via SQLite `strftime`
+  grouping, zero-filled for every hour boundary in the window (an hour
+  with no activity plots as a real zero, not a gap that would silently
+  compress the time axis).
+- `/memory` now calls `acr.evaluation.calibration.compute_calibration()`
+  (built in the "next-level" batch above, but never wired into the
+  dashboard until now — only reachable via `acr memory calibration`
+  before this) and renders its reliability curve as a real paired-bar
+  chart, with the real "not enough recorded outcomes yet" empty state
+  when no memory has any recorded successful/failed use, not a
+  fabricated curve.
+- `/api/graph`'s `tasks` now include `created_at` (previously only
+  `updated_at`) — needed for the timeline's start-to-end bars, and a
+  genuine gap in the original Phase 12 payload once a real Gantt view
+  needed both ends of a task's lifetime.
+
+**The timeline view**: `/visualization` gained a Graph/Timeline toggle
+(same `.theme-toggle` pattern as the existing default/neo-cyber switch,
+persisted to `localStorage`). Timeline is a second `<canvas>`, drawn by
+new functions in the existing `visualization.js` (not a separate file —
+it already owns theme reading, DPR scaling, and the poll loop against
+`/api/graph`, all directly reusable): each recent task becomes a
+horizontal bar from `created_at` to `updated_at` (or "now" if still in
+flight), colored by status, with real hover tooltips. `drawTooltip()` was
+generalized to take an explicit `ctx`/item rather than reading module-level
+`hovered`/`dragging` globals, since the timeline needed its own parallel
+hover-target/hit-test state (rect containment, not circle-radius) without
+disturbing the graph's existing drag-to-pin interaction.
+
+Two real bugs caught before shipping, both against real rendered output
+rather than assumed correct:
+
+- **Script-order bug**: `charts.js` was first added at the bottom of
+  `base.html` (same position as `tables.js`), but unlike `tables.js`
+  (which only reacts to already-rendered tables and is order-independent),
+  every chart-rendering page has an inline `<script>` *inside*
+  `{% block content %}` that calls `ACRCharts.*` synchronously at parse
+  time — which runs before a script tag placed after `<main>` has even
+  been requested. Every chart rendered as a silent blank `<div>`, no
+  console error, no exception — `ACRCharts` was simply `undefined` at
+  the point of the call inside a plain (non-deferred) `<script>` tag.
+  Caught by opening the running dashboard in-browser and checking
+  `document.getElementById(...).innerHTML.length` directly rather than
+  trusting that "no console error" meant "it worked." Fixed by moving
+  `charts.js`'s `<script src>` tag to immediately before `<main>`, and
+  locked in with `test_charts_js_loads_before_page_content_that_calls_it`.
+- **`requestAnimationFrame` never fires against a non-composited
+  Browser-pane tab**: `document.hidden` is `true` in this tool's preview
+  environment, and per spec browsers don't run rAF callbacks for a hidden
+  document — so the *existing* graph canvas and the *new* timeline canvas
+  both read back as fully transparent (zero non-alpha pixels) when
+  inspected via `getImageData()`, even though nothing was actually wrong.
+  Not a regression — re-implementing the exact same coordinate math in a
+  one-off script against the real fetched `/api/graph` data (bypassing
+  the rAF wrapper entirely, painting directly) confirmed real, finite,
+  correctly-positioned bars. Documented here rather than silently
+  reported as "verified" with a screenshot that doesn't exist for this
+  session — visual/pixel confirmation of anything `requestAnimationFrame`-
+  driven isn't currently possible through this tool's preview surface;
+  server-rendered content (everything except the two `<canvas>` views)
+  was verified normally.
+
 ### Code-review hardening pass (2026-07-29)
 
 A systematic review pass (three independent reviewers, one per subsystem

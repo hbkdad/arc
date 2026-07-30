@@ -1,5 +1,32 @@
 {% extends "base.html" %}
 {% block content %}
+<h1>Activity (last 24h)</h1>
+<p class="lede">Real hourly counts from <code>tasks</code> and <code>telemetry_events</code> -- every hour in the window plotted, including zeros, so a quiet stretch reads as a flat line rather than a gap.</p>
+<div class="chart-grid">
+<div class="chart-card"><h3>Tasks created / hour</h3><div id="chart-tasks-hourly"></div></div>
+<div class="chart-card"><h3>Events / hour</h3><div id="chart-events-hourly"></div></div>
+</div>
+<script id="tasks-per-hour-data" type="application/json">{{ tasks_per_hour | tojson }}</script>
+<script id="events-per-hour-data" type="application/json">{{ events_per_hour | tojson }}</script>
+<script>
+(function () {
+  function toPoints(raw) {
+    return raw.map(function (pair) { return { label: pair[0], value: pair[1] }; });
+  }
+  function sum(points) { return points.reduce(function (s, p) { return s + p.value; }, 0); }
+  var tasksData = JSON.parse(document.getElementById("tasks-per-hour-data").textContent);
+  var eventsData = JSON.parse(document.getElementById("events-per-hour-data").textContent);
+  var taskPoints = toPoints(tasksData);
+  var eventPoints = toPoints(eventsData);
+  ACRCharts.sparkline(document.getElementById("chart-tasks-hourly"), taskPoints, {
+    totalLabel: sum(taskPoints) + " total",
+  });
+  ACRCharts.sparkline(document.getElementById("chart-events-hourly"), eventPoints, {
+    totalLabel: sum(eventPoints) + " total",
+  });
+})();
+</script>
+
 <h1>System health</h1>
 <div class="table-wrap">
 <table>

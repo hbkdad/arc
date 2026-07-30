@@ -9,12 +9,43 @@
 <p class="empty">No memory records yet.</p>
 {% endfor %}
 </div>
+{% if type_counts %}
+<div id="chart-memory-types" class="chart-section"></div>
+<script id="memory-type-counts-data" type="application/json">{{ type_counts | tojson }}</script>
+<script>
+(function () {
+  var counts = JSON.parse(document.getElementById("memory-type-counts-data").textContent);
+  var items = Object.keys(counts).map(function (type_) {
+    return { label: type_, value: counts[type_] };
+  });
+  ACRCharts.barChart(document.getElementById("chart-memory-types"), items);
+})();
+</script>
+{% endif %}
 <h2 class="section-label">By status</h2>
 <div class="metric-grid">
 {% for status, n in status_counts.items() %}
 <div class="metric-card {{ status | pill_class }}"><span class="n">{{ n }}</span><span class="label">{{ status }}</span></div>
 {% endfor %}
 </div>
+
+<h1>Confidence calibration</h1>
+<p class="lede">Does a memory's stored confidence actually predict how often it turns out useful? A fixed-bin reliability curve over records with at least one recorded use (<code>successful_uses + failed_uses</code>) -- {{ calibration.records_considered }} record(s) considered, {{ calibration.records_excluded_no_evidence }} excluded for having no recorded outcome yet.{% if calibration.brier_score is not none %} Brier score: <code>{{ "%.3f" | format(calibration.brier_score) }}</code> (lower is better-calibrated).{% endif %}</p>
+<div id="chart-calibration"></div>
+<script>
+(function () {
+  var bins = [
+    {% for b in calibration.bins %}
+    { label: "{{ "%.1f" | format(b.lower) }}-{{ "%.1f" | format(b.upper) }} (n={{ b.count }})",
+      a: {{ b.mean_confidence }}, b: {{ b.empirical_success_rate }} },
+    {% endfor %}
+  ];
+  ACRCharts.pairedBarChart(document.getElementById("chart-calibration"), bins, {
+    aLabel: "predicted confidence", bLabel: "actual success rate", max: 1,
+    emptyMessage: "Not enough recorded outcomes yet to compute calibration.",
+  });
+})();
+</script>
 
 <h1>Recently updated</h1>
 <div class="table-wrap">

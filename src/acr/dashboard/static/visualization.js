@@ -22,9 +22,11 @@
 
   const POLL_MS = 2000;
   const canvas = document.getElementById("graph");
+  const timelineCanvas = document.getElementById("timeline");
   const statusEl = document.getElementById("graph-status");
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
+  const timelineCtx = timelineCanvas ? timelineCanvas.getContext("2d") : null;
 
   // All layout math below (drawTasks, hitTest, ...) works in this fixed
   // logical coordinate space -- the same 900x560 the canvas element was
@@ -35,14 +37,47 @@
   // the rendered size drifted from 900x560).
   const LOGICAL_W = canvas.width;
   const LOGICAL_H = canvas.height;
+  const TIMELINE_W = timelineCanvas ? timelineCanvas.width : 0;
+  const TIMELINE_H = timelineCanvas ? timelineCanvas.height : 0;
 
-  function fitCanvasToDisplay() {
+  function fitCanvasToDisplay(target, logicalW, logicalH) {
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = LOGICAL_W * dpr;
-    canvas.height = LOGICAL_H * dpr;
+    target.width = logicalW * dpr;
+    target.height = logicalH * dpr;
   }
-  fitCanvasToDisplay();
-  window.addEventListener("resize", fitCanvasToDisplay);
+  fitCanvasToDisplay(canvas, LOGICAL_W, LOGICAL_H);
+  if (timelineCanvas) fitCanvasToDisplay(timelineCanvas, TIMELINE_W, TIMELINE_H);
+  window.addEventListener("resize", function () {
+    fitCanvasToDisplay(canvas, LOGICAL_W, LOGICAL_H);
+    if (timelineCanvas) fitCanvasToDisplay(timelineCanvas, TIMELINE_W, TIMELINE_H);
+  });
+
+  // --- view switcher (graph vs timeline) ---------------------------------
+  let activeView = localStorage.getItem("acr-viz-view") === "timeline" ? "timeline" : "graph";
+  const viewGraphBtn = document.getElementById("view-graph");
+  const viewTimelineBtn = document.getElementById("view-timeline");
+  const legendGraph = document.getElementById("legend-graph");
+  const legendTimeline = document.getElementById("legend-timeline");
+
+  function applyView() {
+    const isTimeline = activeView === "timeline";
+    canvas.style.display = isTimeline ? "none" : "block";
+    if (timelineCanvas) timelineCanvas.style.display = isTimeline ? "block" : "none";
+    if (legendGraph) legendGraph.style.display = isTimeline ? "none" : "flex";
+    if (legendTimeline) legendTimeline.style.display = isTimeline ? "flex" : "none";
+    if (viewGraphBtn) viewGraphBtn.setAttribute("aria-pressed", String(!isTimeline));
+    if (viewTimelineBtn) viewTimelineBtn.setAttribute("aria-pressed", String(isTimeline));
+  }
+
+  function setView(view) {
+    activeView = view;
+    localStorage.setItem("acr-viz-view", view);
+    applyView();
+  }
+
+  if (viewGraphBtn) viewGraphBtn.addEventListener("click", () => setView("graph"));
+  if (viewTimelineBtn) viewTimelineBtn.addEventListener("click", () => setView("timeline"));
+  applyView();
 
   // Pulled from the same design tokens base.html defines (light/dark both
   // handled automatically by the browser resolving the CSS custom
@@ -255,6 +290,38 @@
     hovered = null;
   });
 
+  // --- timeline pointer interaction (hover only -- no drag/pin) ---------
+  let timelineHoverTargets = []; // rebuilt every frame: [{x, y, w, h, label, detail}]
+  let timelineHovered = null;
+  let timelineMouse = null;
+
+  function timelineCanvasPoint(evt) {
+    const rect = timelineCanvas.getBoundingClientRect();
+    const scaleX = TIMELINE_W / rect.width;
+    const scaleY = TIMELINE_H / rect.height;
+    return { x: (evt.clientX - rect.left) * scaleX, y: (evt.clientY - rect.top) * scaleY };
+  }
+
+  function timelineHitTest(pt) {
+    for (let i = timelineHoverTargets.length - 1; i >= 0; i--) {
+      const h = timelineHoverTargets[i];
+      if (pt.x >= h.x && pt.x <= h.x + h.w && pt.y >= h.y && pt.y <= h.y + h.h) return h;
+    }
+    return null;
+  }
+
+  if (timelineCanvas) {
+    timelineCanvas.addEventListener("mousemove", (evt) => {
+      timelineMouse = timelineCanvasPoint(evt);
+      timelineHovered = timelineHitTest(timelineMouse);
+      timelineCanvas.style.cursor = timelineHovered ? "pointer" : "default";
+    });
+    timelineCanvas.addEventListener("mouseleave", () => {
+      timelineMouse = null;
+      timelineHovered = null;
+    });
+  }
+
   // --- drawing --------------------------------------------------------
   function drawCore(th, cx, cy, elapsed) {
     const idlePulse = 4 * Math.sin(elapsed / 600);
@@ -378,60 +445,166 @@
     ctx.fillText("event flow (newest on the right, flashes on arrival)", 30, y + 18);
   }
 
-  function drawTooltip(th, width, height) {
-    if (!hovered || dragging) return;
+  function drawTooltip(targetCtx, th, item, width, height) {
+    if (!item) return;
     const pad = 8;
-    ctx.font = "12px system-ui, sans-serif";
+    targetCtx.font = "12px system-ui, sans-serif";
     const w = Math.max(
-      ctx.measureText(hovered.label).width,
-      ctx.measureText(hovered.detail).width
+      targetCtx.measureText(item.label).width,
+      targetCtx.measureText(item.detail).width
     ) + pad * 2;
     const h = 40;
-    let x = hovered.x + 14;
-    let y = hovered.y - h - 10;
+    let x = item.x + 14;
+    let y = item.y - h - 10;
     if (x + w > width) x = width - w - 4;
-    if (y < 0) y = hovered.y + 14;
-    ctx.fillStyle = th.surface;
-    ctx.strokeStyle = th.line;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.roundRect(x, y, w, h, 4);
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = th.ink;
-    ctx.textAlign = "left";
-    ctx.font = "bold 12px system-ui, sans-serif";
-    ctx.fillText(hovered.label, x + pad, y + 17);
-    ctx.fillStyle = th.inkDim;
-    ctx.font = "11px system-ui, sans-serif";
-    ctx.fillText(hovered.detail, x + pad, y + 32);
+    if (y < 0) y = item.y + 14;
+    targetCtx.fillStyle = th.surface;
+    targetCtx.strokeStyle = th.line;
+    targetCtx.lineWidth = 1;
+    targetCtx.beginPath();
+    targetCtx.roundRect(x, y, w, h, 4);
+    targetCtx.fill();
+    targetCtx.stroke();
+    targetCtx.fillStyle = th.ink;
+    targetCtx.textAlign = "left";
+    targetCtx.font = "bold 12px system-ui, sans-serif";
+    targetCtx.fillText(item.label, x + pad, y + 17);
+    targetCtx.fillStyle = th.inkDim;
+    targetCtx.font = "11px system-ui, sans-serif";
+    targetCtx.fillText(item.detail, x + pad, y + 32);
+  }
+
+  function formatDuration(ms) {
+    const s = Math.max(0, ms / 1000);
+    if (s < 60) return s.toFixed(1) + "s";
+    if (s < 3600) return (s / 60).toFixed(1) + "m";
+    return (s / 3600).toFixed(1) + "h";
+  }
+
+  // A real Gantt-style read of the same `latest.tasks` the graph view
+  // already has -- start = created_at, end = updated_at (or "now" for a
+  // task still in flight), so sequence and duration are directly visible
+  // instead of implied by dot position on a fixed-width strip.
+  function drawTimeline(th) {
+    const width = TIMELINE_W;
+    const height = TIMELINE_H;
+    timelineCtx.fillStyle = th.bg;
+    timelineCtx.fillRect(0, 0, width, height);
+    timelineHoverTargets = [];
+
+    const tasks = latest.tasks;
+    const padLeft = 30;
+    const padRight = 30;
+    const padTop = 34;
+    const rowH = Math.min(28, Math.max(14, (height - padTop - 30) / Math.max(tasks.length, 1)));
+    const barH = Math.max(6, rowH - 8);
+
+    timelineCtx.fillStyle = th.inkDim;
+    timelineCtx.font = "11px system-ui, sans-serif";
+    timelineCtx.textAlign = "left";
+    timelineCtx.fillText(
+      "recent tasks, newest first (bar = creation → last update or now)",
+      padLeft,
+      18
+    );
+
+    if (!tasks.length) {
+      timelineCtx.fillStyle = th.inkDim;
+      timelineCtx.font = "13px system-ui, sans-serif";
+      timelineCtx.fillText("no tasks recorded yet", padLeft, padTop + 20);
+      return;
+    }
+
+    const now = Date.now();
+    const starts = tasks.map((t) => new Date(t.created_at).getTime());
+    const ends = tasks.map((t) => new Date(t.updated_at).getTime());
+    const minT = Math.min(...starts);
+    const maxT = Math.max(now, ...ends);
+    const span = Math.max(maxT - minT, 1000);
+    const usableW = width - padLeft - padRight;
+    const mapX = (t) => padLeft + ((t - minT) / span) * usableW;
+
+    // A few evenly-spaced time-axis ticks, oldest to "now".
+    timelineCtx.strokeStyle = th.line;
+    timelineCtx.fillStyle = th.inkDim;
+    timelineCtx.font = "10px system-ui, sans-serif";
+    const tickCount = 4;
+    for (let i = 0; i <= tickCount; i++) {
+      const t = minT + (span * i) / tickCount;
+      const x = mapX(t);
+      timelineCtx.beginPath();
+      timelineCtx.moveTo(x, padTop - 6);
+      timelineCtx.lineTo(x, height - 22);
+      timelineCtx.stroke();
+      const label = i === tickCount ? "now" : formatDuration(now - t) + " ago";
+      timelineCtx.textAlign = i === 0 ? "left" : i === tickCount ? "right" : "center";
+      timelineCtx.fillText(label, x, height - 8);
+    }
+
+    const colors = statusColors(th);
+    tasks.forEach((task, i) => {
+      const y = padTop + i * rowH;
+      const start = new Date(task.created_at).getTime();
+      const end = new Date(task.updated_at).getTime();
+      const x0 = mapX(start);
+      const x1 = Math.max(mapX(Math.max(end, start)), x0 + 2);
+      const swatch = colors[task.status] || th.inkDim;
+      withGlow(th, swatch, () => {
+        timelineCtx.fillStyle = swatch;
+        timelineCtx.beginPath();
+        timelineCtx.roundRect(x0, y, x1 - x0, barH, 3);
+        timelineCtx.fill();
+      });
+      timelineCtx.fillStyle = th.ink;
+      timelineCtx.font = "10px system-ui, sans-serif";
+      timelineCtx.textAlign = "left";
+      const label = (task.objective || "(task)").slice(0, 46);
+      timelineCtx.fillText(label, Math.min(x1 + 6, width - padRight - 8), y + barH - 2);
+      timelineHoverTargets.push({
+        x: x0,
+        y,
+        w: Math.max(x1 - x0, 4),
+        h: barH,
+        label: task.objective || "(task)",
+        detail: "status: " + task.status + " — " + formatDuration(Math.max(end, start) - start),
+      });
+    });
   }
 
   function render(elapsed) {
     const th = theme();
-    const width = LOGICAL_W;
-    const height = LOGICAL_H;
-    const dpr = window.devicePixelRatio || 1;
-    // Reset (not compound -- setTransform is absolute) so every draw call
-    // below can keep using logical 900x560 coordinates while actually
-    // painting onto the DPR-scaled backing store.
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = th.bg;
-    ctx.fillRect(0, 0, width, height);
-    const cx = width / 2;
-    const cy = height / 2 - 20;
 
-    syncRingSim(latest.memory_types, cx, cy);
-    stepPhysics();
+    if (activeView === "graph") {
+      const width = LOGICAL_W;
+      const height = LOGICAL_H;
+      const dpr = window.devicePixelRatio || 1;
+      // Reset (not compound -- setTransform is absolute) so every draw
+      // call below can keep using logical 900x560 coordinates while
+      // actually painting onto the DPR-scaled backing store.
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.fillStyle = th.bg;
+      ctx.fillRect(0, 0, width, height);
+      const cx = width / 2;
+      const cy = height / 2 - 20;
 
-    hoverTargets = [];
-    drawTasks(th, width);
-    drawMemoryRings(th, cx, cy);
-    drawCore(th, cx, cy, elapsed);
-    drawAgents(th, width, height);
-    drawEventTimeline(th, width, height);
-    if (mouse) hovered = hitTest(mouse);
-    drawTooltip(th, width, height);
+      syncRingSim(latest.memory_types, cx, cy);
+      stepPhysics();
+
+      hoverTargets = [];
+      drawTasks(th, width);
+      drawMemoryRings(th, cx, cy);
+      drawCore(th, cx, cy, elapsed);
+      drawAgents(th, width, height);
+      drawEventTimeline(th, width, height);
+      if (mouse) hovered = hitTest(mouse);
+      drawTooltip(ctx, th, dragging ? null : hovered, width, height);
+    } else if (timelineCtx) {
+      const dpr = window.devicePixelRatio || 1;
+      timelineCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      drawTimeline(th);
+      if (timelineMouse) timelineHovered = timelineHitTest(timelineMouse);
+      drawTooltip(timelineCtx, th, timelineHovered, TIMELINE_W, TIMELINE_H);
+    }
 
     requestAnimationFrame(render);
   }

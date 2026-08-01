@@ -988,6 +988,46 @@ def test_agents_spawn_without_force_may_decline_an_unscoped_objective(
         assert "not spawned" in result.stdout
 
 
+def test_agents_spawn_refuses_and_reports_cleanly_when_the_estimate_says_no(
+    migrated_settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The test above can't reliably land on the refusal branch: plan_agent()
+    # never sets AgentSpec.permissions, so estimate_spawn()'s security_risk
+    # term is always 0 via the real CLI path, and coordination_overhead only
+    # grows *with* the same tool/skill count that also raises quality_gain --
+    # naturally tripping worth_spawning=False needs an unrealistic 11+
+    # tools/skills routed to one objective. Patching estimate_spawn() to a
+    # fixed losing estimate exercises the CLI's actual refusal-message path
+    # deterministically instead, matching how test_agents_factory.py isolates
+    # the same decision at the factory level with a directly-overloaded spec.
+    from acr.agents.models import SpawnEstimate
+
+    def _losing_estimate(spec: object) -> SpawnEstimate:
+        return SpawnEstimate(
+            expected_quality_gain=0.1,
+            coordination_overhead=0.9,
+            token_cost=0,
+            latency_benefit=0.0,
+            security_risk=0.0,
+        )
+
+    # Two separate names bound to the same original function -- cli.py's
+    # own display estimate (`from acr.agents.factory import estimate_spawn`)
+    # and spawn_agent()'s internal refusal check (factory.py's own module
+    # global) each need patching independently; patching only one leaves
+    # the other still deciding off the real routing-derived estimate.
+    monkeypatch.setattr("acr.cli.estimate_spawn", _losing_estimate)
+    monkeypatch.setattr("acr.agents.factory.estimate_spawn", _losing_estimate)
+
+    result = runner.invoke(app, ["agents", "spawn", "say hello", "--task-class", "greeting"])
+
+    assert result.exit_code == 1
+    assert "not spawned: estimate does not justify it" in result.stdout
+    assert "quality_gain=0.10" in result.stdout
+    assert "overhead+risk=0.90" in result.stdout
+    assert "use --force to spawn anyway" in result.stdout
+
+
 def test_agents_topology_reports_no_evidence_initially(migrated_settings: Settings) -> None:
     result = runner.invoke(app, ["agents", "topology", "research"])
     assert result.exit_code == 0

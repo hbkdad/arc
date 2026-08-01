@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "( cd \"C:/AI-Projects/acrtest\" && nohup uv run acr dashboard serve --open-browser >/tmp/acr-dashboard-hook.log 2>&1 & )",
+            "timeout": 5,
+            "statusMessage": "Starting ACR dashboard..."
+          }
+        ]
+      }
+    ]
+  }
+}

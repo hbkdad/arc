@@ -1092,7 +1092,7 @@ uv run acr memory record-commit [rev]        # a real git commit -> a DECISION m
 uv run acr backup create [--output PATH]     # zip + SHA-256 manifest of the data dir
 uv run acr backup restore <archive> --target-dir PATH [--force]
 uv run acr models usage                      # real per-provider calls/tokens/estimated cost
-uv run acr dashboard serve [--host --port]   # dashboard + /visualization: http://127.0.0.1:8765
+uv run acr dashboard serve [--host --port --open-browser]   # dashboard + /visualization: http://127.0.0.1:8765
 uv run acr mcp serve [--transport stdio|sse|streamable-http] [--host --port]
 uv run acr improve propose-skill-evolution <baseline-id> <candidate-id>
 uv run acr improve propose-routing-optimization <task-class> <current-model> <candidate-model>
@@ -2031,6 +2031,46 @@ PATH, a fresh clone before `uv sync`) is surfaced, not destructive.
 This repo's own `core.hooksPath` was configured as part of landing this
 change, so every commit from this one onward is captured with no further
 action from anyone.
+
+### Making the dashboard easy to reach (2026-08-01)
+
+User question worth answering precisely, since "why doesn't the dashboard
+auto-connect" conflates two different things: the dashboard is already
+*fully linked* to ACR's real state -- every page is a direct, live SQLite
+read (no cache, no synthetic data, the same "every shape/number is a real
+row" principle this whole file keeps coming back to). What it doesn't
+have is a way to *reach* that state without a manual step, because ACR
+has no background service at all (local-first: nothing runs unless
+explicitly invoked, the same reasoning behind the zero-config mock
+provider default). `acr dashboard serve` is a normal blocking dev server
+-- there was no "one step" way to get from a fresh session to a dashboard
+in a browser tab.
+
+Three real pieces of friction addressed, none of them by daemonizing ACR
+(that would break the "nothing runs unless invoked" premise, not fix the
+UX gap):
+
+- **`acr dashboard serve --open-browser`** -- opens the default browser
+  once the server is actually ready to accept connections (a
+  `threading.Timer`, 1s after `uvicorn.run()` starts, not before -- an
+  immediate open would race a browser tab against a socket that isn't
+  listening yet).
+- **`/acr-dashboard` slash command** -- one step inside a Claude Code
+  session: start (or reuse) the preview server via `preview_start`, then
+  actually verify it's serving live data (not just that a process
+  started) before reporting back.
+- **A `SessionStart` hook** (`.claude/settings.json`) -- launches
+  `acr dashboard serve --open-browser` in the background the moment a
+  Claude Code session begins in this repo, so the dashboard is already
+  open by the time anyone starts typing. Deliberately does *not*
+  pre-check whether a server is already running on port 8765 before
+  attempting to start one -- `uvicorn.run()` fails fast (observed:
+  ~2 seconds, real `[Errno 10048]`/`address already in use`, no orphaned
+  process left behind) and exits cleanly on its own when the port's
+  already taken, which is simpler and just as safe as a separate
+  liveness check would have been. Verified directly: piped the raw hook
+  command against an already-running instance and confirmed via
+  `Get-Process` that no zombie process was left behind either way.
 
 ## What's left
 

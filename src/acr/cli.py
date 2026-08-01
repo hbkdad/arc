@@ -1325,11 +1325,34 @@ def agents_topology(
 def dashboard_serve(
     host: str = typer.Option("127.0.0.1", "--host"),
     port: int = typer.Option(8765, "--port"),
+    open_browser: bool = typer.Option(
+        False,
+        "--open-browser",
+        help="Open the dashboard in your default browser once the server is ready.",
+    ),
 ) -> None:
-    """Serve the operational dashboard (master §1225-1240)."""
+    """Serve the operational dashboard (master §1225-1240).
+
+    Blocks the terminal like any dev server -- ACR has no background
+    service to daemonize this into (local-first: nothing runs unless you
+    invoke it). Run this in its own terminal, or backgrounded yourself
+    (`... &` / a separate shell), and leave it running for as long as you
+    want the dashboard reachable."""
+    import threading
+    import webbrowser
+
     import uvicorn
 
     settings = get_settings()
+
+    if open_browser:
+        # uvicorn.run() below blocks until the server is ready to accept
+        # connections -- opening immediately would race a browser tab
+        # against a socket that isn't listening yet. A short delay on a
+        # background thread is simpler than uvicorn's own startup-event
+        # hooks for a one-shot "open once, then get out of the way" need.
+        threading.Timer(1.0, lambda: webbrowser.open(f"http://{host}:{port}")).start()
+
     uvicorn.run(create_dashboard_app(settings), host=host, port=port)
 
 

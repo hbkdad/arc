@@ -208,6 +208,40 @@ def test_db_upgrade_applies_migrations_from_scratch(settings: Settings) -> None:
     assert settings.database_path.is_file()
 
 
+def test_dashboard_serve_opens_the_browser_when_requested(
+    monkeypatch: pytest.MonkeyPatch, migrated_settings: Settings
+) -> None:
+    import time
+
+    opened: list[str] = []
+    monkeypatch.setattr("uvicorn.run", lambda *a, **k: None)  # never actually bind a socket
+    monkeypatch.setattr("webbrowser.open", opened.append)
+
+    result = runner.invoke(
+        app, ["dashboard", "serve", "--host", "127.0.0.1", "--port", "8765", "--open-browser"]
+    )
+    time.sleep(1.2)  # the real 1s delayed-open Timer fires on its own thread
+
+    assert result.exit_code == 0
+    assert opened == ["http://127.0.0.1:8765"]
+
+
+def test_dashboard_serve_does_not_open_the_browser_by_default(
+    monkeypatch: pytest.MonkeyPatch, migrated_settings: Settings
+) -> None:
+    import time
+
+    opened: list[str] = []
+    monkeypatch.setattr("uvicorn.run", lambda *a, **k: None)
+    monkeypatch.setattr("webbrowser.open", opened.append)
+
+    result = runner.invoke(app, ["dashboard", "serve"])
+    time.sleep(1.2)
+
+    assert result.exit_code == 0
+    assert opened == []
+
+
 def test_backup_create_then_restore_round_trips(
     migrated_settings: Settings, tmp_path: Path
 ) -> None:

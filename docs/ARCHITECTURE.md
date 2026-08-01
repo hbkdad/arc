@@ -2257,6 +2257,50 @@ as an oversight):**
   large a surface to do safely as one item inside a broader audit pass.
   Flagged for its own dedicated session.
 
+### Dashboard `/settings`: configure provider API keys without a terminal (2026-08-01)
+
+The dashboard was read-only end to end until now (every prior route is a
+plain `@app.get`) — this is its first mutating route, added because
+`acr setup`'s terminal wizard is real but not where a user already
+looking at the dashboard, wondering why `/routing` shows every cloud
+profile "unavailable", would think to go.
+
+Design choices, each because the alternative would violate something
+this session already established:
+- **Shared write path, not a second implementation.** `acr.env_config`
+  (new) holds `ensure_env_file()`/`has_var()`/`set_var()`, extracted from
+  what used to be `acr setup`'s local closures. `cli.py`'s `setup()` now
+  calls the same functions — one real `.env`-mutation implementation,
+  not two that could drift (exactly the class of duplication today's
+  architecture audit flagged elsewhere in this codebase).
+- **Live, not "restart the dashboard."** `.env` is normally only read at
+  process start (every other doc in this file says so). `POST /settings`
+  writes the key to `.env` *and* assigns it directly onto the running
+  process's already-constructed `Settings` object (`pydantic-settings`
+  fields are plain mutable attributes, no `validate_assignment` — this
+  is exactly as safe as its own env-var parsing). Every other route
+  closes over that same `settings` instance, so `/routing`'s next
+  request sees the change with no restart. `get_settings.cache_clear()`
+  is also called for hygiene, in case any other in-process caller
+  resolves a fresh `Settings()` later.
+- **A key is written, never read back.** The form always renders blank
+  (a `configured`/`not configured` pill is the only feedback), a blank
+  field means "leave unchanged" (never "clear the key" — the form has
+  no way to know whether blank means "untouched" or "delete this", so it
+  always means the former), and the key never appears in the response
+  body, a log line, or a query string.
+- **JSON body + `fetch()`, not `Form()`.** Avoids adding
+  `python-multipart` as a new dependency for the one form on the one
+  mutating route — matches every other dashboard script (`charts.js`,
+  `tables.js`) already being plain JS with no framework.
+- **No `safe_mode` gate.** Unlike this session's other mutating
+  operations, adding an API key is purely additive/enabling, not
+  destructive or state-changing to existing data — outside what
+  `safe_mode`'s docstring describes it as covering. Consistent with
+  leaving `write_controller.remember()` ungated (see the audit section
+  above); inventing a new gate here would be product policy this
+  session wasn't asked to set.
+
 ## What's left
 
 Every phase in the master spec's 15-phase list (§65-66) now has a

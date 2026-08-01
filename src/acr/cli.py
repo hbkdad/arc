@@ -47,6 +47,9 @@ from acr.dashboard.app import create_app as create_dashboard_app
 from acr.db.base import session_scope
 from acr.db.migrate import upgrade_to_head
 from acr.doctor import CheckStatus, run_checks
+from acr.env_config import DEFAULT_ENV_PATH, ensure_env_file
+from acr.env_config import has_var as _env_has_var
+from acr.env_config import set_var as _env_set_var
 from acr.evaluation.calibration import (
     DEFAULT_MIN_CALIBRATION_GAP,
     DEFAULT_MIN_USES,
@@ -232,31 +235,20 @@ def setup() -> None:
     anywhere. Skip any provider you don't want -- ACR runs fully
     local-first with none of them configured (master principle #2:
     cloud-optional)."""
-    env_path = Path(".env")
-    if not env_path.exists():
-        example = Path(".env.example")
-        env_path.write_text(
-            example.read_text(encoding="utf-8") if example.exists() else "",
-            encoding="utf-8",
-        )
-        typer.echo(f"created {env_path.resolve()}")
-    else:
-        typer.echo(f"found {env_path.resolve()}")
+    env_path = DEFAULT_ENV_PATH
+    existed_already = env_path.exists()
+    env_path = ensure_env_file(env_path)
+    typer.echo(f"{'found' if existed_already else 'created'} {env_path.resolve()}")
 
     existing = env_path.read_text(encoding="utf-8")
 
     def has_var(var: str) -> bool:
-        for line in existing.splitlines():
-            stripped = line.strip()
-            if stripped.startswith(f"{var}=") and stripped[len(var) + 1 :]:
-                return True
-        return False
+        return _env_has_var(existing, var)
 
     def append_var(var: str, value: str) -> None:
         nonlocal existing
-        with env_path.open("a", encoding="utf-8") as f:
-            f.write(f"\n{var}={value}\n")
-        existing += f"\n{var}={value}\n"
+        _env_set_var(env_path, var, value)
+        existing = env_path.read_text(encoding="utf-8")
 
     def configure_provider(var: str, label: str, console_url: str) -> None:
         if has_var(var):

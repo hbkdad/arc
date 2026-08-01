@@ -25,6 +25,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from acr.agents.topology import AgentTopologyRecord
@@ -32,6 +33,7 @@ from acr.config import Settings, get_settings
 from acr.dashboard import queries
 from acr.db.base import make_engine, make_session_factory
 from acr.doctor import run_checks
+from acr.env_config import ensure_env_file, set_var
 from acr.evaluation.calibration import compute_calibration
 from acr.learning.proposals import ProposalStatus, list_proposals
 from acr.routing.factory import build_default_router
@@ -162,6 +164,16 @@ def _topology_graph(
         for (tc, name), agg in sorted(model_weights.items())
     ]
     return task_classes, skills, models, edges
+
+
+class SettingsUpdate(BaseModel):
+    """POST body for `/settings`. Every field defaults to blank/off so a
+    partial submission (only one key entered) never implies "clear the
+    others" — see `settings_update()`'s docstring."""
+
+    anthropic_api_key: str = ""
+    openai_api_key: str = ""
+    enable_default_cloud_routing: bool = False
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -353,6 +365,51 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "auto_apply_proposals": settings.auto_apply_proposals,
             },
         )
+
+    @app.get("/settings", response_class=HTMLResponse)
+    async def settings_page(request: Request, saved: bool = False) -> HTMLResponse:
+        return templates.TemplateResponse(
+            request,
+            "settings.html",
+            {
+                "active": "settings",
+                "saved": saved,
+                "anthropic_configured": bool(settings.anthropic_api_key),
+                "openai_configured": bool(settings.openai_api_key),
+                "default_min_quality_tier": settings.default_min_quality_tier,
+            },
+        )
+
+    @app.post("/settings")
+    async def settings_update(update: SettingsUpdate) -> dict[str, bool]:
+        """Writes each configured key to `.env` (durable across restarts)
+        and mutates this process's already-running `Settings` instance in
+        place (live -- `/routing`'s availability check and every other
+        route reading `settings` from this closure sees it on the very
+        next request, no restart needed). Never logs or echoes a key
+        value; `Settings` fields are plain untyped strings, no
+        `validate_assignment`, so direct attribute assignment here is
+        exactly as safe as pydantic-settings' own env-var parsing.
+
+        A blank field means "leave unchanged", not "clear the key" --
+        the form always renders blank (a key is never redisplayed once
+        saved), so a field the user didn't touch must not be able to
+        wipe a configured one.
+        """
+        env_path = ensure_env_file()
+        anthropic_key = update.anthropic_api_key.strip()
+        if anthropic_key:
+            set_var(env_path, "ACR_ANTHROPIC_API_KEY", anthropic_key)
+            settings.anthropic_api_key = anthropic_key
+        openai_key = update.openai_api_key.strip()
+        if openai_key:
+            set_var(env_path, "ACR_OPENAI_API_KEY", openai_key)
+            settings.openai_api_key = openai_key
+        if update.enable_default_cloud_routing and settings.default_min_quality_tier < 2:
+            set_var(env_path, "ACR_DEFAULT_MIN_QUALITY_TIER", "2")
+            settings.default_min_quality_tier = 2
+        get_settings.cache_clear()
+        return {"saved": True}
 
     @app.get("/visualization", response_class=HTMLResponse)
     async def visualization(request: Request) -> HTMLResponse:

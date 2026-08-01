@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -515,3 +516,85 @@ async def test_events_page_filters_by_event_type(
     assert filtered.status_code == 200
     assert "<code>task.created</code>" in filtered.text
     assert "<code>model.call.completed</code>" not in filtered.text
+
+
+def _isolate_env_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """`/settings` reads/writes `.env` relative to CWD (same as `acr setup`
+    and pydantic-settings' own `env_file=".env"`) -- chdir into a scratch
+    dir so a test never touches this repo's real `.env`."""
+    monkeypatch.chdir(tmp_path)
+    return tmp_path / ".env"
+
+
+async def test_settings_page_shows_not_configured_when_no_keys_set(
+    migrated_settings: Settings,
+) -> None:
+    response = _client(migrated_settings).get("/settings")
+
+    assert response.status_code == 200
+    assert "not configured" in response.text
+    # A key must never be echoed back into the page, configured or not.
+    assert migrated_settings.anthropic_api_key is None
+
+
+async def test_settings_page_shows_configured_pill_for_an_existing_key(
+    migrated_settings: Settings,
+) -> None:
+    migrated_settings.anthropic_api_key = "sk-ant-already-set"
+
+    response = _client(migrated_settings).get("/settings")
+
+    assert response.status_code == 200
+    assert "configured" in response.text
+    # The real key value is never rendered anywhere in the page.
+    assert "sk-ant-already-set" not in response.text
+
+
+async def test_settings_post_writes_key_to_env_file_and_updates_live_settings(
+    migrated_settings: Settings, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    env_path = _isolate_env_file(monkeypatch, tmp_path)
+
+    response = _client(migrated_settings).post(
+        "/settings", json={"anthropic_api_key": "sk-ant-fresh-key"}
+    )
+
+    assert response.status_code == 200
+    assert "ACR_ANTHROPIC_API_KEY=sk-ant-fresh-key" in env_path.read_text(encoding="utf-8")
+    # Live: the *same* Settings instance the running app holds is updated
+    # in place, no restart needed.
+    assert migrated_settings.anthropic_api_key == "sk-ant-fresh-key"
+
+
+async def test_settings_post_with_a_blank_field_does_not_clear_an_existing_key(
+    migrated_settings: Settings, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _isolate_env_file(monkeypatch, tmp_path)
+    migrated_settings.anthropic_api_key = "sk-ant-keep-me"
+
+    response = _client(migrated_settings).post("/settings", json={"anthropic_api_key": ""})
+
+    assert response.status_code == 200
+    assert migrated_settings.anthropic_api_key == "sk-ant-keep-me"
+
+
+async def test_settings_post_enable_default_cloud_routing_raises_the_tier(
+    migrated_settings: Settings, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    env_path = _isolate_env_file(monkeypatch, tmp_path)
+    assert migrated_settings.default_min_quality_tier == 0
+
+    response = _client(migrated_settings).post(
+        "/settings", json={"enable_default_cloud_routing": True}
+    )
+
+    assert response.status_code == 200
+    assert migrated_settings.default_min_quality_tier == 2
+    assert "ACR_DEFAULT_MIN_QUALITY_TIER=2" in env_path.read_text(encoding="utf-8")
+
+
+async def test_settings_saved_banner_shown_after_redirect(migrated_settings: Settings) -> None:
+    response = _client(migrated_settings).get("/settings", params={"saved": "1"})
+
+    assert response.status_code == 200
+    assert "Settings saved" in response.text

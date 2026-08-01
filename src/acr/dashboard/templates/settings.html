@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Settings</h1>
+<p class="lede">Configure cloud provider API keys so <a href="/routing">Routing</a>, usage/cost tracking, and <code>acr run --min-quality-tier 2</code> can reach a real model instead of only the free mock/Ollama tiers. Keys are written to your local <code>.env</code> file only -- never to the database, logs, or Git -- and take effect immediately in this running dashboard, no restart needed.</p>
+
+{% if saved %}
+<div class="settings-banner">Settings saved. <a href="/routing">Check availability on the Routing page</a>.</div>
+{% endif %}
+
+<form id="settings-form">
+<div class="settings-card">
+  <div class="settings-field">
+    <label for="anthropic-key">Anthropic (Claude) API key <span class="pill {{ anthropic_configured | pill_class }}">{{ "configured" if anthropic_configured else "not configured" }}</span></label>
+    <input type="password" id="anthropic-key" name="anthropic_api_key" autocomplete="off" placeholder="{{ 'leave blank to keep the current key' if anthropic_configured else 'sk-ant-...' }}">
+  </div>
+  <div class="settings-field">
+    <label for="openai-key">OpenAI API key <span class="pill {{ openai_configured | pill_class }}">{{ "configured" if openai_configured else "not configured" }}</span></label>
+    <input type="password" id="openai-key" name="openai_api_key" autocomplete="off" placeholder="{{ 'leave blank to keep the current key' if openai_configured else 'sk-...' }}">
+  </div>
+  <label class="settings-check">
+    <input type="checkbox" id="enable-default-cloud-routing" name="enable_default_cloud_routing" {% if default_min_quality_tier >= 2 %}checked disabled{% endif %}>
+    Route <code>acr run</code> / MCP <code>run_task</code> through a configured provider by default
+    {% if default_min_quality_tier >= 2 %}(already on){% endif %}
+  </label>
+  <button type="submit" class="btn-primary">Save</button>
+  <p class="settings-note">A saved key is never displayed again here -- leave a field blank to keep what's already configured.</p>
+</div>
+</form>
+
+<script>
+(function () {
+  var form = document.getElementById("settings-form");
+  form.addEventListener("submit", function (event) {
+    event.preventDefault();
+    var body = {
+      anthropic_api_key: document.getElementById("anthropic-key").value,
+      openai_api_key: document.getElementById("openai-key").value,
+      enable_default_cloud_routing: document.getElementById("enable-default-cloud-routing").checked,
+    };
+    fetch("/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(function (response) {
+      if (response.ok) {
+        window.location.href = "/settings?saved=1";
+      }
+    });
+  });
+})();
+</script>
+{% endblock %}

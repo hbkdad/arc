@@ -73,6 +73,10 @@ async def test_propose_skill_evolution_creates_a_pending_proposal_when_recommend
     assert proposal.status is ProposalStatus.PENDING
     assert proposal.subject == baseline_id
     assert proposal.payload["candidate_id"] == candidate_id
+    # No trajectory_audit passed -- the payload shape (and therefore
+    # approve_proposal()'s later EvolutionComparison(**payload) call) must
+    # stay exactly what it was before that parameter existed.
+    assert "trajectory_audit" not in proposal.payload
 
 
 async def test_propose_skill_evolution_returns_none_for_a_regression(
@@ -123,6 +127,37 @@ async def test_propose_skill_evolution_with_a_favorable_audit_creates_a_proposal
     assert proposal is not None
     assert proposal.payload["trajectory_audit"]["verdict"] == "candidate"
     assert "trajectory audit also favors the candidate" in proposal.reason
+
+
+async def test_approve_proposal_applies_a_trajectory_audited_proposal(
+    migrated_settings: Settings, db_session: AsyncSession, tmp_path: Path
+) -> None:
+    # Regression test: the payload for an audited proposal carries an
+    # extra "trajectory_audit" key alongside the plain comparison fields
+    # (see the test above) -- approve_proposal()'s _apply() reconstructs
+    # EvolutionComparison(**proposal.payload), which previously crashed
+    # with an unexpected-keyword TypeError on that exact extra key. This
+    # exercises the full propose -> approve -> promote path, not just
+    # proposal creation.
+    baseline_id, candidate_id = await _seed_improving_candidate(db_session, tmp_path)
+    proposal = await propose_skill_evolution(
+        db_session,
+        migrated_settings,
+        TelemetryRecorder(),
+        baseline_id=baseline_id,
+        candidate_id=candidate_id,
+        trajectory_audit=_audit(baseline_id, candidate_id, TrajectoryVerdict.CANDIDATE),
+    )
+    assert proposal is not None
+    await db_session.commit()
+
+    approved = await approve_proposal(db_session, TelemetryRecorder(), proposal.id)
+    await db_session.commit()
+
+    assert approved.status is ProposalStatus.APPROVED
+    candidate = await get(db_session, candidate_id)
+    assert candidate is not None
+    assert candidate.status is SkillStatus.ACTIVE
 
 
 async def test_propose_skill_evolution_with_a_tie_audit_returns_none_despite_numeric_win(

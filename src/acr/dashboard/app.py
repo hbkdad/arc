@@ -21,7 +21,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -381,7 +381,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     @app.post("/settings")
-    async def settings_update(update: SettingsUpdate) -> dict[str, bool]:
+    async def settings_update(request: Request, update: SettingsUpdate) -> dict[str, bool]:
         """Writes each configured key to `.env` (durable across restarts)
         and mutates this process's already-running `Settings` instance in
         place (live -- `/routing`'s availability check and every other
@@ -391,11 +391,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         `validate_assignment`, so direct attribute assignment here is
         exactly as safe as pydantic-settings' own env-var parsing.
 
+        This is the dashboard's only mutating route, and it has no other
+        auth (matching the rest of the dashboard's local-first, single-
+        user threat model) -- without an origin check, a malicious page
+        open in another tab could POST here cross-origin (a same-origin
+        policy violation Starlette's own JSON body parsing doesn't
+        prevent: it reads the raw body regardless of Content-Type, so
+        `text/plain` keeps a cross-origin fetch() "simple" and preflight-
+        free) and silently plant an attacker-controlled key. Browsers
+        send `Origin` on every state-changing fetch/XHR, same-origin or
+        not, so rejecting a *present-but-mismatched* Origin blocks that
+        without breaking this page's own same-origin save button.
+        A request with no Origin header at all (curl, direct API use)
+        is intentionally still allowed.
+
         A blank field means "leave unchanged", not "clear the key" --
         the form always renders blank (a key is never redisplayed once
         saved), so a field the user didn't touch must not be able to
         wipe a configured one.
         """
+        origin = request.headers.get("origin")
+        if (
+            origin is not None
+            and origin.rstrip("/") != f"{request.url.scheme}://{request.url.netloc}"
+        ):
+            raise HTTPException(status_code=403, detail="cross-origin request rejected")
+
         env_path = ensure_env_file()
         anthropic_key = update.anthropic_api_key.strip()
         if anthropic_key:

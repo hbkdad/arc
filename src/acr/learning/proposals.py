@@ -27,7 +27,7 @@ entirely outside what "self-improvement" means in this system.
 from __future__ import annotations
 
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
@@ -347,7 +347,16 @@ async def propose_memory_recalibration(
 
 async def _apply(session: AsyncSession, proposal: Proposal, *, safe_mode: bool) -> None:
     if proposal.kind is ProposalKind.SKILL_EVOLUTION_PROMOTION:
-        comparison = EvolutionComparison(**proposal.payload)
+        # payload may carry an extra "trajectory_audit" key (see
+        # propose_skill_evolution()) for transparency/review -- kept
+        # alongside the comparison fields rather than nested away, so it
+        # must be filtered back out here before reconstructing the
+        # dataclass, or any trajectory-audited proposal would crash on
+        # approval with an unexpected-keyword TypeError.
+        comparison_fields = {f.name for f in fields(EvolutionComparison)}
+        comparison = EvolutionComparison(
+            **{k: v for k, v in proposal.payload.items() if k in comparison_fields}
+        )
         baseline = await get(session, comparison.baseline_id)
         assert baseline is not None  # existed when the proposal was created
         await promote_evolution(session, baseline, comparison.candidate_id, safe_mode=safe_mode)

@@ -36,9 +36,20 @@ def isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     process environment (see `Settings.model_config`'s `env_prefix`), so
     without this a test's behavior could silently depend on whatever the
     machine running it happens to have configured outside the test.
+
+    Also chdirs into `tmp_path` -- `Settings.model_config`'s `env_file=".env"`
+    is resolved relative to CWD, same as pydantic-settings' own convention,
+    so clearing process env vars alone still left every `Settings()` built
+    under this fixture reading this *repo's real* `.env` file underneath
+    (invisible while `.env` had no real values in it; a real provider key
+    configured there -- e.g. via the dashboard's own `/settings` page --
+    silently changed what "fresh"/"unconfigured" tests actually observed).
+    Migrations resolve their own directory via `Path(__file__)`, not CWD,
+    so this is safe for the `migrated_settings`/Alembic paths too.
     """
     for key in [k for k in os.environ if k.startswith("ACR_")]:
         monkeypatch.delenv(key, raising=False)
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("ACR_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("ACR_LOG_FORMAT", "console")
     get_settings.cache_clear()

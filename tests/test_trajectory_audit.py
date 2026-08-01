@@ -11,9 +11,11 @@ from acr.core.tasks.models import Step, StepKind, TaskRun, TaskStatus
 from acr.providers.base import CompletionRequest, CompletionResult, ModelProvider
 from acr.providers.mock import MockProvider
 from acr.skills.evolution import create_candidate_version
+from acr.skills.models import SkillRecord
 from acr.skills.registry import register
 from acr.skills.trajectory_audit import (
     TrajectoryVerdict,
+    _final_output_text,
     _parse_verdict,
     audit_trajectories,
     run_skill_trajectory,
@@ -21,6 +23,33 @@ from acr.skills.trajectory_audit import (
 from acr.telemetry.recorder import TelemetryRecorder
 
 FIXTURES = Path(__file__).parent / "fixtures" / "skills"
+
+
+class _AlwaysFailsProvider(ModelProvider):
+    name = "always-fails"
+
+    async def is_available(self) -> bool:
+        return True
+
+    async def complete(self, request: CompletionRequest) -> CompletionResult:
+        raise RuntimeError("simulated provider failure")
+
+
+async def _candidate_with_instructions(
+    session: AsyncSession, tmp_path: Path, baseline: SkillRecord, instructions_text: str
+) -> SkillRecord:
+    """`create_candidate_version()` only writes a new SKILL.yaml -- it never
+    copies `instructions.md` -- so a candidate built with no further setup
+    always has empty instructions. Every trajectory-audit test that used
+    `create_candidate_version(..., {})` alone was therefore comparing the
+    baseline's real guidance against a candidate given *no* guidance at
+    all, never a genuinely different version -- not the scenario this
+    feature exists to support. This gives the candidate real, distinct
+    instructions, the way an actual `acr skills evolve` + hand-edit
+    workflow would."""
+    candidate = await create_candidate_version(session, tmp_path, baseline, {})
+    (Path(candidate.path) / "instructions.md").write_text(instructions_text, encoding="utf-8")
+    return candidate
 
 
 class _VerdictProvider(ModelProvider):
@@ -68,6 +97,47 @@ async def test_run_skill_trajectory_prepends_the_skills_own_guidance(
     assert "Use when a task involves inspecting or repairing" in prompt_step.payload["prompt"]
     assert "PRAGMA integrity_check" in prompt_step.payload["prompt"]
     assert "Objective: check the tasks table" in prompt_step.payload["prompt"]
+
+
+async def test_run_skill_trajectory_uses_the_candidates_own_distinct_instructions(
+    db_session: AsyncSession, tmp_path: Path
+) -> None:
+    baseline = await register(db_session, FIXTURES / "sqlite-diagnostics")
+    candidate = await _candidate_with_instructions(
+        db_session, tmp_path, baseline, "# v2\n\nAlways run VACUUM before reporting."
+    )
+
+    task = await run_skill_trajectory(
+        db_session, MockProvider(), TelemetryRecorder(), candidate, "check the tasks table"
+    )
+
+    run = (
+        (await db_session.execute(select(TaskRun).where(TaskRun.task_id == task.id)))
+        .scalars()
+        .one()
+    )
+    steps = (
+        (await db_session.execute(select(Step).where(Step.task_run_id == run.id))).scalars().all()
+    )
+    prompt = next(s for s in steps if s.name == "model.complete").payload["prompt"]
+    assert "Always run VACUUM before reporting" in prompt
+    # Confirms this is genuinely the candidate's own content, not a
+    # leftover copy of the baseline's -- create_candidate_version() never
+    # copies instructions.md, so a bug there would leave this empty.
+    assert "PRAGMA integrity_check" not in prompt
+
+
+async def test_final_output_text_reports_a_failed_trajectory(db_session: AsyncSession) -> None:
+    skill = await register(db_session, FIXTURES / "sqlite-diagnostics")
+
+    task = await run_skill_trajectory(
+        db_session, _AlwaysFailsProvider(), TelemetryRecorder(), skill, "check the tasks table"
+    )
+
+    text = await _final_output_text(db_session, task)
+
+    assert "failed" in text
+    assert "simulated provider failure" in text
 
 
 async def test_audit_trajectories_with_mock_provider_is_an_honest_tie(

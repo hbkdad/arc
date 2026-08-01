@@ -85,10 +85,17 @@ async def run_skill_trajectory(
 
 
 async def _final_output_text(session: AsyncSession, task: Task) -> str:
+    # Ordered defensively, not because run_task() produces more than one
+    # TaskRun/relevant Step today (it doesn't -- one run, one OBSERVATION
+    # step, a hard try/except fork) -- but silently returning stale output
+    # if that ever changes (e.g. a future retry path) would be a much
+    # worse failure mode than a query hint that's momentarily redundant.
     run = (
         (
             await session.execute(
-                select(TaskRun).where(TaskRun.task_id == task.id).order_by(TaskRun.started_at)
+                select(TaskRun)
+                .where(TaskRun.task_id == task.id)
+                .order_by(TaskRun.started_at.desc())
             )
         )
         .scalars()
@@ -96,7 +103,11 @@ async def _final_output_text(session: AsyncSession, task: Task) -> str:
     )
     if run is None:
         return ""
-    steps = (await session.execute(select(Step).where(Step.task_run_id == run.id))).scalars().all()
+    steps = (
+        (await session.execute(select(Step).where(Step.task_run_id == run.id).order_by(Step.index)))
+        .scalars()
+        .all()
+    )
     for step in steps:
         if step.kind is StepKind.OBSERVATION and step.name == "model.result":
             text = step.payload.get("text")
@@ -133,10 +144,15 @@ def _judge_prompt(*, objective: str, baseline_output: str, candidate_output: str
 
 
 def _parse_verdict(judge_text: str) -> tuple[TrajectoryVerdict, str]:
-    match = _VERDICT_PATTERN.search(judge_text)
-    if match is None:
+    # The LAST match, not the first: the judge prompt embeds both attempts'
+    # raw text, and a real model can echo/quote the instruction text (which
+    # itself contains all three verdict strings) before its own genuine
+    # closing line -- taking the first match would misreport in exactly
+    # that case.
+    matches = list(_VERDICT_PATTERN.finditer(judge_text))
+    if not matches:
         return TrajectoryVerdict.TIE, "judge response did not include a parseable verdict"
-    return TrajectoryVerdict(match.group(1).lower()), judge_text.strip()
+    return TrajectoryVerdict(matches[-1].group(1).lower()), judge_text.strip()
 
 
 async def audit_trajectories(

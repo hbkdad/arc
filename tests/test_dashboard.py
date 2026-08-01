@@ -562,7 +562,12 @@ async def test_settings_page_shows_configured_pill_for_an_existing_key(
     response = _client(migrated_settings).get("/settings")
 
     assert response.status_code == 200
-    assert "configured" in response.text
+    # Exact pill class, not a loose "configured" substring match -- "not
+    # configured" (the OpenAI field, still unset) also contains the
+    # substring "configured", so a bare `in` check can't actually tell
+    # the two pill states apart.
+    assert '<span class="pill pill-ok">configured</span>' in response.text
+    assert '<span class="pill pill-danger">not configured</span>' in response.text
     # The real key value is never rendered anywhere in the page.
     assert "sk-ant-already-set" not in response.text
 
@@ -581,6 +586,22 @@ async def test_settings_post_writes_key_to_env_file_and_updates_live_settings(
     # Live: the *same* Settings instance the running app holds is updated
     # in place, no restart needed.
     assert migrated_settings.anthropic_api_key == "sk-ant-fresh-key"
+
+
+async def test_settings_post_writes_openai_key_to_env_file_and_updates_live_settings(
+    migrated_settings: Settings, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The Anthropic branch above is a near-identical copy-paste of this
+    # one in settings_update() -- without its own test, a typo'd env var
+    # name or wrong settings attribute in *this* branch specifically
+    # would pass CI silently.
+    env_path = _isolate_env_file(monkeypatch, tmp_path)
+
+    response = _client(migrated_settings).post("/settings", json={"openai_api_key": "sk-fresh-key"})
+
+    assert response.status_code == 200
+    assert "ACR_OPENAI_API_KEY=sk-fresh-key" in env_path.read_text(encoding="utf-8")
+    assert migrated_settings.openai_api_key == "sk-fresh-key"
 
 
 async def test_settings_post_with_a_blank_field_does_not_clear_an_existing_key(
@@ -608,6 +629,54 @@ async def test_settings_post_enable_default_cloud_routing_raises_the_tier(
     assert response.status_code == 200
     assert migrated_settings.default_min_quality_tier == 2
     assert "ACR_DEFAULT_MIN_QUALITY_TIER=2" in env_path.read_text(encoding="utf-8")
+
+
+async def test_settings_post_enable_default_cloud_routing_is_a_noop_once_already_on(
+    migrated_settings: Settings, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    env_path = _isolate_env_file(monkeypatch, tmp_path)
+    migrated_settings.default_min_quality_tier = 2
+
+    response = _client(migrated_settings).post(
+        "/settings", json={"enable_default_cloud_routing": True}
+    )
+
+    assert response.status_code == 200
+    assert migrated_settings.default_min_quality_tier == 2
+    # No redundant write -- the guard (`< 2`) must actually skip set_var(),
+    # not just skip re-mutating the in-memory value.
+    assert not env_path.exists() or "ACR_DEFAULT_MIN_QUALITY_TIER" not in env_path.read_text(
+        encoding="utf-8"
+    )
+
+
+async def test_settings_post_rejects_a_cross_origin_request(
+    migrated_settings: Settings,
+) -> None:
+    response = _client(migrated_settings).post(
+        "/settings",
+        json={"anthropic_api_key": "sk-ant-attacker-key"},
+        headers={"origin": "https://evil.example"},
+    )
+
+    assert response.status_code == 403
+    assert migrated_settings.anthropic_api_key is None
+
+
+async def test_settings_post_allows_a_same_origin_request(
+    migrated_settings: Settings, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _isolate_env_file(monkeypatch, tmp_path)
+    client = _client(migrated_settings)
+
+    response = client.post(
+        "/settings",
+        json={"anthropic_api_key": "sk-ant-fresh-key"},
+        headers={"origin": str(client.base_url)},
+    )
+
+    assert response.status_code == 200
+    assert migrated_settings.anthropic_api_key == "sk-ant-fresh-key"
 
 
 async def test_settings_saved_banner_shown_after_redirect(migrated_settings: Settings) -> None:

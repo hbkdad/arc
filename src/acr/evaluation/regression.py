@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import literal_column, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from acr.benchmarks.models import BenchmarkRun
@@ -29,10 +29,14 @@ class RegressionReport:
 
 
 async def _recent_runs(session: AsyncSession, suite_name: str, limit: int) -> list[BenchmarkRun]:
+    # `created_at` alone can tie at whatever timestamp resolution the platform
+    # actually gives us, and `id` is a random uuid4 (see BenchmarkRun), not a
+    # sortable one -- so break ties with SQLite's implicit rowid, which is
+    # assigned in strict insertion order, to keep baseline/current stable.
     stmt = (
         select(BenchmarkRun)
         .where(BenchmarkRun.suite_name == suite_name)
-        .order_by(BenchmarkRun.created_at.desc())
+        .order_by(BenchmarkRun.created_at.desc(), literal_column("rowid").desc())
         .limit(limit)
     )
     return list((await session.execute(stmt)).scalars().all())

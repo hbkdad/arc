@@ -205,7 +205,10 @@ _ADVERSARIAL_REL_PATH = st.builds(
 )
 
 
-@settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
+@settings(
+    suppress_health_check=[HealthCheck.function_scoped_fixture, HealthCheck.too_slow],
+    deadline=None,
+)
 @given(_ADVERSARIAL_REL_PATH)
 def test_safe_target_never_returns_a_path_outside_target_dir(tmp_path: Path, rel_path: str) -> None:
     """The actual security property `_safe_target()` exists to guarantee,

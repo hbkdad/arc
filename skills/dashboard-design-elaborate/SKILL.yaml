@@ -1,0 +1,21 @@
+id: dashboard-design-elaborate
+name: Elaborate Dashboard Design Direction
+version: "1.0.0"
+description: Propose a concrete, upscale visual-design direction (palette, typography, layout concept) for ACR's token-based operational dashboard theme system.
+task_classes:
+  - ui-design-generation
+  - dashboard-theming
+inputs:
+  target: string
+outputs:
+  design_direction: string
+dependencies: []
+permissions: []
+tools: []
+models: []
+token_estimate: 380
+applicability: Use when asked to propose a new visual theme or design direction for ACR's dashboard, in the same token-substitution style as its existing Default and Neo Cyber themes.
+contraindications: Do not use for reviewing or critiquing an existing design (see ui-design-critique/dashboard-ui-audit instead), and do not use for anything outside the dashboard's own CSS-custom-property theming system.
+verification: The proposal must name specific hex colors for every existing token (--bg, --surface, --surface-2, --line, --ink, --ink-dim, --accent, --accent-ink, --wire, --ok, --warn, --danger, --info), a typeface pairing, and one concrete layout/texture idea -- never a vague mood description with no implementable specifics.
+origin: manual
+author: acr-team

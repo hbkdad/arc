@@ -258,10 +258,27 @@ async def test_overview_page_offers_a_neo_cyber_theme_toggle(
     assert response.status_code == 200
     assert 'id="theme-cyber"' in response.text
     assert 'id="theme-default"' in response.text
+    assert 'id="theme-observatory"' in response.text
     assert ':root[data-theme="cyber"]' in response.text
+    assert ':root[data-theme="observatory"]' in response.text
     # The toggle script must exist wherever the buttons do -- a page with
     # the buttons but no handler would render inert, unclickable controls.
     assert "setTheme" in response.text
+
+
+async def test_observatory_theme_declares_its_own_display_font_and_texture(
+    migrated_settings: Settings,
+) -> None:
+    response = _client(migrated_settings).get("/")
+
+    observatory_block = response.text.split(':root[data-theme="observatory"]')[1].split("}")[0]
+    assert "--display-font:" in observatory_block
+    assert "Iowan Old Style" in observatory_block
+    assert "--bg-texture:" in observatory_block
+    assert "--bg-texture-size:" in observatory_block
+    # h1/.brand must actually consume the new token -- declaring it with
+    # nothing reading it would be a silent no-op.
+    assert "font-family: var(--display-font)" in response.text
 
 
 async def test_visualization_page_renders_the_canvas_and_script(

@@ -22,11 +22,13 @@
     --info: #3F5E82;
     --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace;
     --sans: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    --display-font: var(--mono);
     --radius: 4px;
     --pill-radius: 999px;
     --glow-accent: none;
     --glow-danger: none;
     --bg-texture: none;
+    --bg-texture-size: auto;
     --scanline-opacity: 0;
     --canvas-glow: 0;
   }
@@ -91,6 +93,47 @@
     --scanline-opacity: 0.05;
     --canvas-glow: 12;
   }
+  /* "Observatory" -- a deep-space instrument-room palette: near-black sky,
+     brass-and-lamplight accent, a soft pure-CSS starfield (layered radial
+     gradients, no image asset -- stays offline/zero-dependency like every
+     other dashboard asset) instead of Neo Cyber's scanlines. Its own
+     serif --display-font (headings only; body text stays on --sans for
+     legibility) is the one place typography differs at all between
+     themes -- everything else here is a token substitution over the exact
+     same structural CSS every other theme already shares. */
+  :root[data-theme="observatory"] {
+    color-scheme: dark;
+    --bg: #0A0E17;
+    --surface: #12192B;
+    --surface-2: #1B2440;
+    --line: #2C3A5E;
+    --ink: #EDE6D3;
+    --ink-dim: #8D96B3;
+    --accent: #D8A448;
+    --accent-ink: #1A1204;
+    --wire: #6B8CAE;
+    --ok: #6FCF97;
+    --warn: #E0B85C;
+    --danger: #E0645A;
+    --info: #6B9BD1;
+    --display-font: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    --radius: 3px;
+    --pill-radius: 999px;
+    --glow-accent:
+      0 0 5px color-mix(in srgb, var(--accent) 55%, transparent),
+      0 0 16px color-mix(in srgb, var(--accent) 25%, transparent);
+    --glow-danger: 0 0 7px color-mix(in srgb, var(--danger) 55%, transparent);
+    --bg-texture:
+      radial-gradient(1.6px 1.6px at 12% 18%, color-mix(in srgb, var(--ink) 75%, transparent), transparent),
+      radial-gradient(1.2px 1.2px at 32% 62%, color-mix(in srgb, var(--ink) 55%, transparent), transparent),
+      radial-gradient(1.8px 1.8px at 58% 28%, color-mix(in srgb, var(--accent) 60%, transparent), transparent),
+      radial-gradient(1.2px 1.2px at 74% 82%, color-mix(in srgb, var(--ink) 60%, transparent), transparent),
+      radial-gradient(1.4px 1.4px at 86% 44%, color-mix(in srgb, var(--ink) 45%, transparent), transparent),
+      radial-gradient(1.2px 1.2px at 6% 88%, color-mix(in srgb, var(--accent) 45%, transparent), transparent);
+    --bg-texture-size: 340px 340px;
+    --scanline-opacity: 0;
+    --canvas-glow: 6;
+  }
   * { box-sizing: border-box; }
   body {
     font-family: var(--sans);
@@ -99,6 +142,7 @@
     min-height: 100vh;
     background-color: var(--bg);
     background-image: var(--bg-texture);
+    background-size: var(--bg-texture-size);
     color: var(--ink);
     font-size: 14px;
     line-height: 1.5;
@@ -165,7 +209,7 @@
     flex-direction: column;
   }
   .brand {
-    font-family: var(--mono);
+    font-family: var(--display-font);
     font-weight: 700;
     font-size: 15px;
     letter-spacing: 0.06em;
@@ -214,7 +258,7 @@
   /* --- main --- */
   main { flex: 1; padding: 1.75rem 2.25rem 3rem; max-width: 1180px; }
   h1 {
-    font-family: var(--mono);
+    font-family: var(--display-font);
     font-weight: 700;
     font-size: 19px;
     letter-spacing: 0.01em;
@@ -443,7 +487,7 @@
   // writes to.
   (function () {
     var saved = localStorage.getItem("acr-theme");
-    if (saved === "cyber") document.documentElement.dataset.theme = "cyber";
+    if (saved === "cyber" || saved === "observatory") document.documentElement.dataset.theme = saved;
   })();
 </script>
 </head>
@@ -453,6 +497,7 @@
   <div class="theme-toggle" role="group" aria-label="Dashboard theme">
     <button type="button" id="theme-default" aria-pressed="true">Default</button>
     <button type="button" id="theme-cyber" aria-pressed="false">Neo Cyber</button>
+    <button type="button" id="theme-observatory" aria-pressed="false">Observatory</button>
   </div>
   <a href="/" class="{{ 'active' if active == 'overview' }}">Overview</a>
   <div class="nav-group">
@@ -492,27 +537,32 @@
 </main>
 <script>
   (function () {
-    var defaultBtn = document.getElementById("theme-default");
-    var cyberBtn = document.getElementById("theme-cyber");
+    var buttons = {
+      "default": document.getElementById("theme-default"),
+      "cyber": document.getElementById("theme-cyber"),
+      "observatory": document.getElementById("theme-observatory"),
+    };
 
     function sync() {
-      var isCyber = document.documentElement.dataset.theme === "cyber";
-      defaultBtn.setAttribute("aria-pressed", String(!isCyber));
-      cyberBtn.setAttribute("aria-pressed", String(isCyber));
+      var current = document.documentElement.dataset.theme || "default";
+      Object.keys(buttons).forEach(function (theme) {
+        buttons[theme].setAttribute("aria-pressed", String(theme === current));
+      });
     }
 
     function setTheme(theme) {
-      if (theme === "cyber") {
-        document.documentElement.dataset.theme = "cyber";
-      } else {
+      if (theme === "default") {
         delete document.documentElement.dataset.theme;
+      } else {
+        document.documentElement.dataset.theme = theme;
       }
       localStorage.setItem("acr-theme", theme);
       sync();
     }
 
-    defaultBtn.addEventListener("click", function () { setTheme("default"); });
-    cyberBtn.addEventListener("click", function () { setTheme("cyber"); });
+    Object.keys(buttons).forEach(function (theme) {
+      buttons[theme].addEventListener("click", function () { setTheme(theme); });
+    });
     sync();
   })();
 </script>

@@ -346,7 +346,8 @@ successful/total ratio a skill has earned) -> estimate token overhead
 `skills/` (repo root, alongside `tests/fixtures/skills/`'s test-only
 fixtures) holds ACR's actual, registered-and-active skill packages —
 `dashboard-ui-audit`, `ui-design-critique`, `code-review-checklist`,
-`context-minimization`. Each declares only tools/permissions ACR's real
+`context-minimization`, `dashboard-design-elaborate` (2026-08-01, the
+skill behind the Observatory theme below). Each declares only tools/permissions ACR's real
 registries have (`acr.tools.default_tools.build_default_registry()`,
 `acr.security.permissions.Capability`) — `acr skills register` doesn't
 validate at registration time, so a manifest referencing a since-renamed
@@ -2360,6 +2361,57 @@ source). `acr skills audit-trajectory <baseline> <candidate> "<objective>"`
 runs it standalone; `acr improve propose-skill-evolution ... --objective
 "..."` runs it inline before proposing. Both cost real provider tokens
 above tier 0, unlike every other `propose-*` command, which stays free.
+
+### A third dashboard theme, designed by running the trial-and-error loop for real (2026-08-01)
+
+A direct, real exercise of `acr.skills.trajectory_audit` (added earlier
+the same session) rather than a description of how it *could* be used:
+a new first-party skill, `skills/dashboard-design-elaborate/`, asks for
+an "elaborate, upscale, frontier-tier" third dashboard theme; a v2
+candidate sharpens the brief toward a more maximalist, editorial point
+of view; `acr skills audit-trajectory` ran both through the local Ollama
+`llama3.1:8b` provider on the same objective and judged them -- verdict:
+`CANDIDATE`, real output, not staged.
+
+Worth being honest about what that output actually was: Ollama's raw
+proposal ("Omniverse") had real, usable creative direction (a deep-space/
+observatory thesis, a grain-texture overlay idea, a glow motif) but its
+literal specifics weren't trustworthy on inspection — mislabeled colors
+(`--accent: #ff7b0a /* Neon green */` is orange), and a fabricated
+typeface attribution ("Caveat by Adrian Frutiger" — Caveat is a Pablo
+Impallari face; Frutiger had nothing to do with it). This is exactly
+what `trajectory_audit`'s own module docstring already warned:
+"[the verdict is] only as good as the provider judging it." A local 8B
+model is real, useful signal for *direction*, not a substitute for
+actual design review — so the direction was taken as a brief, and the
+actual token values, typography, and CSS below were built by hand
+against that brief, not copy-pasted from the model's output.
+
+**Observatory** — a deep-space instrument-room palette shipped as
+`:root[data-theme="observatory"]` in `dashboard/templates/base.html`,
+the exact same token-substitution pattern Default and Neo Cyber already
+use, so it required zero changes to any component's CSS. Near-black
+`--bg`/`--surface` navy, warm brass `--accent` (`#D8A448`), a soft
+pure-CSS starfield (six layered `radial-gradient`s tiled via a new
+`--bg-texture-size` token — `--bg-texture` alone controls the pattern,
+but `background-size` isn't itself a custom property, so it needed its
+own token to be themeable; defaults to `auto` for Default/Cyber,
+unchanged) instead of Neo Cyber's scanlines, and its own serif
+`--display-font` (`"Iowan Old Style", "Palatino Linotype", Palatino,
+Georgia, serif` — real cross-platform system fonts, no webfont
+download, consistent with the dashboard's zero-new-dependency
+principle) applied to `h1`/`.brand` only — body text stays on the
+existing `--sans` stack for legibility, matching the theme's own design
+brief ("legibility matters more than atmosphere"). Contrast checked
+live in-browser, not assumed: ink-on-bg 17.9:1, accent-ink-on-accent
+12.2:1, dim-ink-on-bg 5.6:1 — all comfortably past WCAG AA's 4.5:1.
+
+Toggle logic in `base.html`'s inline script was generalized from a
+hardcoded binary (`isCyber` boolean) to a `theme -> button` map so a
+third (or future fourth) theme doesn't need its own bespoke branch —
+`tests/test_dashboard.py` covers the new buttons, the new token block,
+and that `--display-font` is actually consumed somewhere (declaring a
+token nothing reads would be a silent no-op).
 
 ## What's left
 

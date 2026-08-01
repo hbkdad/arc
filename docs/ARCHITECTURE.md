@@ -1095,7 +1095,8 @@ uv run acr backup restore <archive> --target-dir PATH [--force]
 uv run acr models usage                      # real per-provider calls/tokens/estimated cost
 uv run acr dashboard serve [--host --port --open-browser]   # dashboard + /visualization: http://127.0.0.1:8765
 uv run acr mcp serve [--transport stdio|sse|streamable-http] [--host --port]
-uv run acr improve propose-skill-evolution <baseline-id> <candidate-id>
+uv run acr skills audit-trajectory <baseline-id> <candidate-id> "<objective>" [--min-quality-tier N]  # real paired-trajectory LLM judge
+uv run acr improve propose-skill-evolution <baseline-id> <candidate-id> [--objective "..." --min-quality-tier N]
 uv run acr improve propose-routing-optimization <task-class> <current-model> <candidate-model>
 uv run acr improve propose-recalibration [--min-uses N --min-gap N]   # miscalibrated memory confidence -> a real correction proposal
 uv run acr improve list [--status pending|approved|rejected|auto_applied]
@@ -2300,6 +2301,65 @@ this session already established:
   leaving `write_controller.remember()` ungated (see the audit section
   above); inventing a new gate here would be product policy this
   session wasn't asked to set.
+
+### Paired trajectory auditing: a real LLM judge for skill evolution (2026-08-01)
+
+The third and last of the three build items approved from the
+competitive-research pass. The original framing — compare two live
+execution *trajectories* produced by the baseline and candidate skill
+versions — ran into a real architectural fact discovered while
+investigating it: **nothing in ACR ever made a skill's content influence
+a task's actual model completion.** `run_task()` calls
+`provider.complete(CompletionRequest(prompt=objective))` with the raw
+objective only; `spawn_agent()` never injects `spec.skills` into that
+prompt either — skills were routed, scored, and evolved, but never
+literally *used* to shape a real output. `skills/validation.py`'s own
+docstring independently confirms this: "ACR has no code-execution engine
+yet (a skill package is metadata plus human-readable instructions, not
+executable code)." Framing this as "trajectory" comparison without first
+closing that gap would have been dishonest — there'd be nothing real to
+compare.
+
+`acr.skills.trajectory_audit` closes the smallest real version of that
+gap: `run_skill_trajectory()` prepends a skill's own `applicability` +
+`instructions.md` to the objective and runs it through `run_task()` —
+not a code-execution engine, just the standard shape of skill-augmented
+prompting, and the first place a skill's content causally affects a real
+completion. `audit_trajectories()` runs the baseline and candidate this
+way on the *same* objective, then asks the *same* provider to judge the
+two real outputs head to head (deliberately the same provider for both
+attempts and the judge — asking a stronger model to judge a weaker
+model's attempts would conflate "which provider is smarter" with "which
+skill version is better," not the question being asked). The judge
+prompt requires a `VERDICT: BASELINE|CANDIDATE|TIE` closing line, parsed
+deterministically; an unparseable response degrades to `TIE` with an
+honest rationale rather than guessing. This is the SkillAudit research
+pattern cited in the earlier research pass: pairwise relative judgment
+between two real runs, not an absolute score against a fixed threshold —
+and `acr.evaluation.evaluators`' own module docstring already named this
+exact gap ("an LLM-judge evaluator later once there's a real model call
+to grade").
+
+Honest about its ceiling: `MockProvider`'s deterministic echo has no
+real judgment capability, so a judge run through it correctly returns
+`TIE` every time (verified by test, not asserted from documentation).
+Real evidence needs a real provider — the dashboard's new `/settings`
+page (same commit set) is the direct enabler for this actually producing
+a meaningful verdict instead of a placeholder.
+
+Wired in as strictly additive, not a replacement: `propose_skill_evolution()`
+gained an optional `trajectory_audit` parameter. Left `None` (the
+default), behavior is byte-for-byte what it was before this feature —
+`compare_versions()`'s numeric recommendation is still the sole gate,
+and every existing test for it still passes unchanged. Passing a real
+`TrajectoryAuditResult` adds a *second*, independent evidence
+requirement: both signals must favor the candidate, or no proposal is
+created — the same two-independent-signals caution this session applied
+elsewhere (adversarial-style verification, not blind trust of one
+source). `acr skills audit-trajectory <baseline> <candidate> "<objective>"`
+runs it standalone; `acr improve propose-skill-evolution ... --objective
+"..."` runs it inline before proposing. Both cost real provider tokens
+above tier 0, unlike every other `propose-*` command, which stays free.
 
 ## What's left
 

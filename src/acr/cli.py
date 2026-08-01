@@ -125,6 +125,7 @@ from acr.skills.models import InvalidSkillTransition, SkillRecord, SkillStatus
 from acr.skills.registry import SkillNotFoundError, get, list_skills, register, set_status
 from acr.skills.routing import RoutedSkill, route
 from acr.skills.search import SkillSearchResult, search
+from acr.skills.trajectory_audit import TrajectoryAuditResult, audit_trajectories
 from acr.skills.validation import ValidationReport, run_validation
 from acr.telemetry.explain import TaskExplanation, explain_task
 from acr.telemetry.explain import TaskNotFoundError as TaskExplainNotFoundError
@@ -1138,6 +1139,60 @@ def skills_compare_evolution(
     typer.echo(f"recommend_promote={comparison.recommend_promote}: {comparison.reason}")
 
 
+@skills_app.command("audit-trajectory")
+def skills_audit_trajectory(
+    baseline_id: str = typer.Argument(...),
+    candidate_id: str = typer.Argument(...),
+    objective: str = typer.Argument(..., help="Objective to run both versions against."),
+    min_quality_tier: int = typer.Option(
+        0,
+        "--min-quality-tier",
+        help="0=mock (always TIE -- no real judgment). Raise to use a real "
+        "Ollama/cloud provider for real evidence.",
+    ),
+) -> None:
+    """Run baseline and candidate on the same objective, then have a real
+    LLM judge compare the two resulting trajectories head to head
+    (`acr.skills.trajectory_audit`). Costs real provider tokens at
+    --min-quality-tier above 0."""
+    settings = get_settings()
+
+    async def _audit() -> TrajectoryAuditResult:
+        async with session_scope(settings) as session:
+            baseline = await get(session, baseline_id)
+            candidate = await get(session, candidate_id)
+            if baseline is None:
+                raise SkillNotFoundError(baseline_id)
+            if candidate is None:
+                raise SkillNotFoundError(candidate_id)
+            router = build_default_router(settings)
+            profile = await router.select(min_quality_tier=min_quality_tier)
+            result = await audit_trajectories(
+                session,
+                profile.provider,
+                TelemetryRecorder(),
+                baseline=baseline,
+                candidate=candidate,
+                objective=objective,
+            )
+            await session.commit()
+            return result
+
+    try:
+        result = asyncio.run(_audit())
+    except SkillNotFoundError as exc:
+        typer.echo(f"unknown skill: {exc}")
+        raise typer.Exit(code=1) from exc
+    except NoProviderAvailableError as exc:
+        typer.echo(f"no provider available: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(f"verdict={result.verdict.value}")
+    typer.echo(result.rationale)
+    typer.echo(f"baseline task: {result.baseline_task_id}")
+    typer.echo(f"candidate task: {result.candidate_task_id}")
+
+
 @skills_app.command("promote-evolution")
 def skills_promote_evolution(
     baseline_id: str = typer.Argument(...),
@@ -1458,6 +1513,16 @@ def _echo_proposal(p: Proposal) -> None:
 def improve_propose_skill_evolution(
     baseline_id: str = typer.Argument(..., help="Currently active skill id."),
     candidate_id: str = typer.Argument(..., help="Evolved candidate skill id to compare."),
+    objective: str | None = typer.Option(
+        None,
+        "--objective",
+        help="If given, also run `skills audit-trajectory` first and require its "
+        "verdict to favor the candidate too -- a stronger, opt-in evidence gate "
+        "on top of the numeric comparison (costs real provider tokens).",
+    ),
+    min_quality_tier: int = typer.Option(
+        0, "--min-quality-tier", help="Only used with --objective; see `skills audit-trajectory`."
+    ),
 ) -> None:
     """Compare a skill evolution candidate against its baseline; propose promoting it
     only if the comparison actually recommends it (master §1721-1727)."""
@@ -1465,12 +1530,31 @@ def improve_propose_skill_evolution(
 
     async def _propose() -> Proposal | None:
         async with session_scope(settings) as session:
+            trajectory_audit = None
+            if objective is not None:
+                baseline = await get(session, baseline_id)
+                candidate = await get(session, candidate_id)
+                if baseline is None:
+                    raise SkillNotFoundError(baseline_id)
+                if candidate is None:
+                    raise SkillNotFoundError(candidate_id)
+                router = build_default_router(settings)
+                profile = await router.select(min_quality_tier=min_quality_tier)
+                trajectory_audit = await audit_trajectories(
+                    session,
+                    profile.provider,
+                    TelemetryRecorder(),
+                    baseline=baseline,
+                    candidate=candidate,
+                    objective=objective,
+                )
             proposal = await propose_skill_evolution(
                 session,
                 settings,
                 TelemetryRecorder(),
                 baseline_id=baseline_id,
                 candidate_id=candidate_id,
+                trajectory_audit=trajectory_audit,
             )
             await session.commit()
             return proposal
@@ -1482,6 +1566,9 @@ def improve_propose_skill_evolution(
         raise typer.Exit(code=1) from exc
     except SkillNotFoundError as exc:
         typer.echo(f"unknown skill: {exc}")
+        raise typer.Exit(code=1) from exc
+    except NoProviderAvailableError as exc:
+        typer.echo(f"no provider available: {exc}")
         raise typer.Exit(code=1) from exc
 
     if proposal is None:

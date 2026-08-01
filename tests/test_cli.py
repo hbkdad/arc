@@ -807,6 +807,70 @@ def test_skills_evolve_compare_and_promote_end_to_end(migrated_settings: Setting
     assert "restored sqlite-diagnostics -> active" in rollback_result.stdout
 
 
+def test_skills_audit_trajectory_runs_end_to_end(migrated_settings: Settings) -> None:
+    runner.invoke(app, ["skills", "register", str(_FIXTURE_SKILL)])
+    runner.invoke(app, ["skills", "activate", "sqlite-diagnostics", "--status", "active"])
+    runner.invoke(
+        app, ["skills", "evolve", "sqlite-diagnostics", "--description", "Improved diagnostics."]
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "skills",
+            "audit-trajectory",
+            "sqlite-diagnostics",
+            "sqlite-diagnostics@v2",
+            "check the tasks table",
+        ],
+    )
+
+    assert result.exit_code == 0
+    # Tier 0 is the mock provider -- an honest run has no real judgment
+    # capability, so the verdict must come back tie, never fabricated.
+    assert "verdict=tie" in result.stdout
+    assert "baseline task:" in result.stdout
+    assert "candidate task:" in result.stdout
+
+
+def test_skills_audit_trajectory_reports_unknown_skill_cleanly(
+    migrated_settings: Settings,
+) -> None:
+    result = runner.invoke(
+        app, ["skills", "audit-trajectory", "does-not-exist", "also-missing", "objective"]
+    )
+    assert result.exit_code == 1
+    assert "unknown skill" in result.stdout
+
+
+def test_improve_propose_skill_evolution_with_objective_runs_the_audit_first(
+    migrated_settings: Settings,
+) -> None:
+    runner.invoke(app, ["skills", "register", str(_FIXTURE_SKILL)])
+    runner.invoke(app, ["skills", "activate", "sqlite-diagnostics", "--status", "active"])
+    runner.invoke(
+        app, ["skills", "evolve", "sqlite-diagnostics", "--description", "Improved diagnostics."]
+    )
+
+    # Tier 0 (mock, the default) can never produce a real CANDIDATE
+    # verdict -- the audit gate must correctly block the proposal even
+    # though compare_versions() alone would recommend it.
+    result = runner.invoke(
+        app,
+        [
+            "improve",
+            "propose-skill-evolution",
+            "sqlite-diagnostics",
+            "sqlite-diagnostics@v2",
+            "--objective",
+            "check the tasks table",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "no proposal" in result.stdout
+
+
 def test_improve_propose_approve_end_to_end(migrated_settings: Settings) -> None:
     runner.invoke(app, ["skills", "register", str(_FIXTURE_SKILL)])
     runner.invoke(app, ["skills", "activate", "sqlite-diagnostics", "--status", "active"])

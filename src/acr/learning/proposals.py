@@ -46,6 +46,7 @@ from acr.security.audit import record_audit_event
 from acr.security.safe_mode import require_not_safe_mode
 from acr.skills.evolution import EvolutionComparison, compare_versions, promote_evolution
 from acr.skills.registry import SkillNotFoundError, get
+from acr.skills.trajectory_audit import TrajectoryAuditResult, TrajectoryVerdict
 from acr.telemetry.recorder import TelemetryRecorder
 
 
@@ -111,16 +112,28 @@ async def propose_skill_evolution(
     *,
     baseline_id: str,
     candidate_id: str,
+    trajectory_audit: TrajectoryAuditResult | None = None,
 ) -> Proposal | None:
     """Compare `candidate_id` against `baseline_id` (Phase 9) and, only if the
     comparison actually recommends promotion, create a `Proposal` for it.
 
     Never proposes a regression — `compare_versions()`'s own recommendation
-    is the sole gate. Returns `None` (not a rejected `Proposal`) when the
-    candidate doesn't recommend promotion: a non-improvement isn't a
-    proposal that got turned down, it's simply not evidence of anything to
+    is the sole gate by default. Returns `None` (not a rejected `Proposal`)
+    when the candidate doesn't recommend promotion: a non-improvement isn't
+    a proposal that got turned down, it's simply not evidence of anything to
     propose (master principle: never publish a result the evidence doesn't
     support).
+
+    `trajectory_audit`, if given (from `acr.skills.trajectory_audit
+    .audit_trajectories()`), is an *additional* evidence gate, not a
+    replacement — `compare_versions()`'s numeric recommendation AND the
+    audit's real judged verdict must both favor the candidate before a
+    proposal is created, the same two-independent-signals caution used
+    elsewhere in this session. Left `None` (the default), behavior is
+    exactly `compare_versions()`-only, unchanged from before this
+    parameter existed — running an audit costs real provider tokens
+    (two trajectory runs plus a judge call), so this function stays free
+    unless a caller explicitly opts in.
     """
     if not settings.self_improvement_enabled:
         raise SelfImprovementDisabledError(
@@ -137,13 +150,23 @@ async def propose_skill_evolution(
     comparison = compare_versions(baseline, candidate)
     if not comparison.recommend_promote:
         return None
+    if trajectory_audit is not None and trajectory_audit.verdict is not TrajectoryVerdict.CANDIDATE:
+        return None
+
+    payload: dict[str, Any] = asdict(comparison)
+    reason = comparison.reason
+    if trajectory_audit is not None:
+        payload["trajectory_audit"] = asdict(trajectory_audit)
+        reason = (
+            f"{reason}; trajectory audit also favors the candidate: {trajectory_audit.rationale}"
+        )
 
     auto_apply = settings.auto_apply_proposals
     proposal = Proposal(
         kind=ProposalKind.SKILL_EVOLUTION_PROMOTION,
         subject=baseline_id,
-        payload=asdict(comparison),
-        reason=comparison.reason,
+        payload=payload,
+        reason=reason,
         status=ProposalStatus.PENDING,
     )
     session.add(proposal)

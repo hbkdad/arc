@@ -31,6 +31,7 @@ from acr.security.safe_mode import SafeModeError
 from acr.skills.evolution import create_candidate_version
 from acr.skills.models import SkillStatus
 from acr.skills.registry import SkillNotFoundError, get, register, set_status
+from acr.skills.trajectory_audit import TrajectoryAuditResult, TrajectoryVerdict
 from acr.telemetry.recorder import TelemetryRecorder
 
 FIXTURES = Path(__file__).parent / "fixtures" / "skills"
@@ -89,6 +90,76 @@ async def test_propose_skill_evolution_returns_none_for_a_regression(
 
     assert proposal is None
     assert await list_proposals(db_session) == []
+
+
+def _audit(
+    baseline_id: str, candidate_id: str, verdict: TrajectoryVerdict
+) -> TrajectoryAuditResult:
+    return TrajectoryAuditResult(
+        baseline_id=baseline_id,
+        candidate_id=candidate_id,
+        baseline_task_id="task-baseline",
+        candidate_task_id="task-candidate",
+        objective="check the tasks table",
+        verdict=verdict,
+        rationale="stub rationale for testing",
+    )
+
+
+async def test_propose_skill_evolution_with_a_favorable_audit_creates_a_proposal(
+    migrated_settings: Settings, db_session: AsyncSession, tmp_path: Path
+) -> None:
+    baseline_id, candidate_id = await _seed_improving_candidate(db_session, tmp_path)
+
+    proposal = await propose_skill_evolution(
+        db_session,
+        migrated_settings,
+        TelemetryRecorder(),
+        baseline_id=baseline_id,
+        candidate_id=candidate_id,
+        trajectory_audit=_audit(baseline_id, candidate_id, TrajectoryVerdict.CANDIDATE),
+    )
+
+    assert proposal is not None
+    assert proposal.payload["trajectory_audit"]["verdict"] == "candidate"
+    assert "trajectory audit also favors the candidate" in proposal.reason
+
+
+async def test_propose_skill_evolution_with_a_tie_audit_returns_none_despite_numeric_win(
+    migrated_settings: Settings, db_session: AsyncSession, tmp_path: Path
+) -> None:
+    # compare_versions() alone would recommend promotion here (same fixture
+    # as the favorable-audit test above) -- a TIE verdict from the second,
+    # independent signal must still block the proposal.
+    baseline_id, candidate_id = await _seed_improving_candidate(db_session, tmp_path)
+
+    proposal = await propose_skill_evolution(
+        db_session,
+        migrated_settings,
+        TelemetryRecorder(),
+        baseline_id=baseline_id,
+        candidate_id=candidate_id,
+        trajectory_audit=_audit(baseline_id, candidate_id, TrajectoryVerdict.TIE),
+    )
+
+    assert proposal is None
+
+
+async def test_propose_skill_evolution_with_a_baseline_favoring_audit_returns_none(
+    migrated_settings: Settings, db_session: AsyncSession, tmp_path: Path
+) -> None:
+    baseline_id, candidate_id = await _seed_improving_candidate(db_session, tmp_path)
+
+    proposal = await propose_skill_evolution(
+        db_session,
+        migrated_settings,
+        TelemetryRecorder(),
+        baseline_id=baseline_id,
+        candidate_id=candidate_id,
+        trajectory_audit=_audit(baseline_id, candidate_id, TrajectoryVerdict.BASELINE),
+    )
+
+    assert proposal is None
 
 
 async def test_propose_skill_evolution_raises_when_self_improvement_disabled(

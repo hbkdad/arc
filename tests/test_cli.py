@@ -235,15 +235,16 @@ def test_dashboard_serve_opens_the_browser_when_requested(
 def test_dashboard_serve_does_not_open_the_browser_by_default(
     monkeypatch: pytest.MonkeyPatch, migrated_settings: Settings
 ) -> None:
-    import time
-
     opened: list[str] = []
     monkeypatch.setattr("uvicorn.run", lambda *a, **k: None)
     monkeypatch.setattr("webbrowser.open", opened.append)
 
     result = runner.invoke(app, ["dashboard", "serve"])
-    time.sleep(1.2)
 
+    # No sleep needed here (unlike the --open-browser test above): without
+    # that flag, dashboard_serve() never schedules the delayed-open Timer
+    # in the first place, so there's nothing to wait for -- opened stays
+    # empty immediately, not just eventually.
     assert result.exit_code == 0
     assert opened == []
 

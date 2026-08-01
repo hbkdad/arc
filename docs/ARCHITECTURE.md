@@ -358,7 +358,7 @@ hand. `tests/test_real_skills.py` parametrizes over every directory under
 build_default_registry())` passes — a regression guard against exactly
 that drift, not just a fixture-only validation test.
 
-These four were written, not ported wholesale from Claude Code's own
+These five were written, not ported wholesale from Claude Code's own
 ~200-skill library: most of those are tied to connectors ACR doesn't have
 (Figma, Slack, Zapier, ...), and registering a skill declaring a tool ACR
 can't actually invoke would be a false capability claim in its own skill
@@ -1082,8 +1082,8 @@ uv run acr skills compare-evolution <baseline-id> <candidate-id>
 uv run acr skills promote-evolution <baseline-id> <candidate-id>
 uv run acr skills rollback-evolution <active-id> <restore-id>
 uv run acr agents plan "objective" [--role X --token-budget N --task-class X]  # AgentSpec via real routing + exposure
-uv run acr agents spawn "objective" --task-class X [--force] [--escalate] [--min-quality-tier N]  # required: closes the evidence loop -- see below
-uv run acr agents topology <task-class>                     # evidence-gated worker-count recommendation
+uv run acr agents spawn "objective" --task-class X [--role X] [--force] [--escalate] [--min-quality-tier N]  # required: closes the evidence loop -- see below
+uv run acr agents topology <task-class> [--min-samples N]   # evidence-gated worker-count recommendation
 uv run acr explain <task-id>                 # replay a task's real telemetry trail, no narrative
 uv run acr learn failures "objective" [--task-class X --limit N]  # similar past FAILURE memories
 uv run acr learn self-practice [--limit N --min-quality-tier N]   # run each active skill's own applicability
@@ -2412,6 +2412,90 @@ third (or future fourth) theme doesn't need its own bespoke branch —
 `tests/test_dashboard.py` covers the new buttons, the new token block,
 and that `--display-font` is actually consumed somewhere (declaring a
 token nothing reads would be a silent no-op).
+
+### Second full system re-audit: security, architecture, tests, performance, dashboard, docs (2026-08-01)
+
+A second round, six parallel independent agents this time (the first
+full audit covered five dimensions; this one added performance and
+re-swept everything else fresh rather than only diffing since the last
+pass). Real, confirmed findings, fixed:
+
+**Security — two real gaps in the newest code:**
+- Path traversal: `SkillManifest.id` (`skills/format.py`) had no
+  validation, and `skills.evolution.create_candidate_version()` builds
+  a filesystem path directly from it (`data_dir / "generated_skills" /
+  f"{id}@vN"`). An untrusted skill package registered with an id like
+  `"../../../etc/passwd"` would, once evolved, write outside the
+  intended directory. Added a `field_validator` rejecting anything that
+  isn't a safe path segment (letters/digits/`_`/`-`/`.`/`@`, no
+  separators, no `..`) — `@` allowed since real candidate ids use it
+  (`sqlite-diagnostics@v2`).
+- Prompt injection into the trajectory-audit judge: a skill's own
+  `applicability`/`instructions` are the one thing `trajectory_audit.py`
+  lets directly shape a real completion, and under audit, a real LLM
+  judge's actual promotion verdict. `skills.validation.run_validation()`
+  already scans for exactly this (`security.injection.scan_for_injection()`)
+  but only marks a report stage failed, never blocks anything.
+  `run_skill_trajectory()` now runs the same scan and refuses outright
+  (`SuspiciousSkillContentError`, no provider call spent) before ever
+  turning a flagged skill's content into a prompt — justified as
+  stricter than validation's advisory-only check because this path can
+  end in an actual promotion.
+
+**Performance — one real degrading-over-time issue, one cheap safe win:**
+- `telemetry.usage.usage_by_provider()` fetched and JSON-deserialized
+  *every* `model.call.completed` event ever recorded, aggregating in
+  Python — unlike every other dashboard query (all already `GROUP BY`/
+  `LIMIT` at the SQL level). Called from `/routing` and from `/api/graph`,
+  which polls every 2 seconds while the tab is open, so this got slower
+  for the entire lifetime of a long-running local instance. Rewritten to
+  aggregate in SQL (`GROUP BY` over a `json_extract`'d provider column).
+- `db/base.py`'s `_set_sqlite_pragmas()` had WAL mode but not its
+  standard pairing, `PRAGMA synchronous=NORMAL` — added (WAL's own docs
+  recommend this pairing; the durability tradeoff is losing the last
+  commit or two to an OS crash between checkpoints, never corruption,
+  and fsync is a real, meaningful per-commit cost, especially on
+  Windows). This also closed a gap an *earlier* audit this session had
+  flagged and left open: nothing verified the pragmas actually took
+  effect on a real connection, not just that the event listener was
+  wired up — added `tests/test_db_base.py`, querying `PRAGMA
+  journal_mode`/`synchronous`/`busy_timeout` back from a real connection.
+
+**Test quality:** one leftover `time.sleep(1.2)` in
+`test_dashboard_serve_does_not_open_the_browser_by_default` — its sibling
+test was fixed to poll a few commits ago, but this one needed no wait at
+all (without `--open-browser`, `dashboard_serve()` never schedules the
+Timer being waited on) — removed outright rather than converted to a
+poll, since there was never anything to poll for.
+
+**Docs:** `agents spawn`'s `--role` and `agents topology`'s
+`--min-samples` were missing from the command cheat-sheet; the
+first-party skill library section still said "these four" after a
+fifth skill (`dashboard-design-elaborate`) was added to the same
+section; ADR-0001 predicted `apps/dashboard` wouldn't exist until
+Phase 11 needed it, and now that Phase 11 is done, the ADR didn't say
+whether that prediction held (it did — dashboard landed as `acr.dashboard`,
+a submodule, not `apps/dashboard`) or account for `skills/`, a real
+top-level directory that now exists. All fixed. Also corrected a
+cosmetic wrong master-doc citation (§696 → §1661 for skill manual
+activation) in two code comments.
+
+**Considered, deliberately not changed:** dashboard pill contrast.
+`.pill-danger`/`.pill-warn`/`.pill-ok`/`.pill-info`'s shared formula
+(`color-mix(in srgb, var(--X) 16%, transparent)` background, `var(--X)`
+text) computes to as low as 4.20:1 in places — just under WCAG AA's
+4.5:1 for the pills' 11px bold text. Computed the actual composited
+contrast (not eyeballed) across all four theme variants (Default light/
+dark, Neo Cyber, Observatory) and all four semantic colors before
+deciding: this is a real, broader issue than the one case originally
+flagged (`pill-danger` in dark themes) — `pill-warn`/`pill-ok` already
+fail in Default-light at the *current* 16% tint, and no single shared
+tint percentage passes AA everywhere without visibly flattening every
+pill into looking like plain surface — `default-light`'s warn/ok colors
+have a hard ceiling of ~4.7:1 even at *zero* tint. Fixing this properly
+needs adjusting the underlying semantic color tokens per theme, a real
+design pass, not a mechanical percentage change — deferred as its own
+task rather than forced through under a "quality check."
 
 ## What's left
 

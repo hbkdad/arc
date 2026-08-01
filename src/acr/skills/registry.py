@@ -75,7 +75,7 @@ class SkillNotFoundError(LookupError):
 async def set_status(
     session: AsyncSession, skill_id: str, target: SkillStatus, *, safe_mode: bool = False
 ) -> SkillRecord:
-    """Manual activation/lifecycle control (master §696: "manual activation").
+    """Manual activation/lifecycle control (master §1661: "manual activation").
 
     A thin, validated wrapper over `SkillRecord.transition` — raises
     `SkillNotFoundError` for an unknown id, `InvalidSkillTransition` (from

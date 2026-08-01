@@ -37,16 +37,32 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from acr.core.execution import run_task
 from acr.core.tasks.models import Step, StepKind, Task, TaskRun
 from acr.providers.base import CompletionRequest, ModelProvider
+from acr.security.injection import scan_for_injection
 from acr.skills.format import load_instructions, load_manifest
 from acr.skills.models import SkillRecord
 from acr.telemetry.recorder import TelemetryRecorder
 
 __all__ = [
+    "SuspiciousSkillContentError",
     "TrajectoryAuditResult",
     "TrajectoryVerdict",
     "audit_trajectories",
     "run_skill_trajectory",
 ]
+
+
+class SuspiciousSkillContentError(RuntimeError):
+    """Raised by `run_skill_trajectory()` when `scan_for_injection()` flags
+    a skill's own applicability/instructions before they're ever turned
+    into a prompt. A skill's content is the one thing this module lets
+    directly shape a real completion (see module docstring) -- and, for a
+    candidate under audit, an LLM judge's real promotion verdict. Refusing
+    up front (never spending a provider call, real or otherwise) is
+    stricter than `skills.validation.run_validation()`'s equivalent check,
+    which only marks a report stage FAILED without blocking anything --
+    justified here because this path can end in an actual promotion, not
+    just a passive validation report."""
+
 
 _VERDICT_PATTERN = re.compile(r"VERDICT:\s*(BASELINE|CANDIDATE|TIE)", re.IGNORECASE)
 
@@ -78,6 +94,14 @@ async def run_skill_trajectory(
     skill_dir = Path(skill.path)
     manifest = load_manifest(skill_dir)
     instructions = load_instructions(skill_dir) or ""
+
+    scan = scan_for_injection("\n".join([manifest.applicability, instructions]))
+    if scan.suspicious:
+        raise SuspiciousSkillContentError(
+            f"skill {skill.id!r} flagged by injection scan before ever running as a "
+            f"prompt: {', '.join(scan.matched_patterns)}"
+        )
+
     prompt = _skill_prompt(
         applicability=manifest.applicability, instructions=instructions, objective=objective
     )

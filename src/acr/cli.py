@@ -455,7 +455,7 @@ def skills_search(
 def skills_activate(
     skill_id: str = typer.Argument(..., help="Skill id to transition."),
     status: SkillStatus = typer.Option(
-        SkillStatus.ACTIVE, "--status", help="Target status (manual activation, master §696)."
+        SkillStatus.ACTIVE, "--status", help="Target status (manual activation, master §1661)."
     ),
 ) -> None:
     """Manually transition a skill's lifecycle status."""

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from acr.routing.models import ModelProfile
@@ -44,35 +44,45 @@ async def usage_by_provider(
     A provider that has real usage but no longer has a configured
     `ModelProfile` (e.g. removed from the ladder) still appears, just with
     `cost_per_1k_tokens`/`estimated_cost` both `None` -- real usage is
-    never hidden for lack of a current price."""
-    stmt = select(TelemetryEvent).where(TelemetryEvent.event_type == "model.call.completed")
-    events = list((await session.execute(stmt)).scalars().all())
+    never hidden for lack of a current price.
+
+    Aggregated in SQL (`GROUP BY` over a `json_extract`'d provider name),
+    not fetched-then-summed in Python -- this is called from `/routing`
+    and `/api/graph` (the latter polled every 2s per its own docstring),
+    so pulling and JSON-deserializing every `model.call.completed` row
+    ever recorded on each poll would keep getting slower for as long as a
+    local instance stays in real use, unlike every other dashboard query
+    (all already `GROUP BY`/`LIMIT` at the SQL level)."""
+    provider_col = TelemetryEvent.payload["provider"].as_string()
+    input_tokens_col = TelemetryEvent.payload["input_tokens"].as_integer()
+    output_tokens_col = TelemetryEvent.payload["output_tokens"].as_integer()
+
+    stmt = (
+        select(
+            provider_col.label("provider"),
+            func.count().label("calls"),
+            func.coalesce(func.sum(input_tokens_col), 0).label("input_tokens"),
+            func.coalesce(func.sum(output_tokens_col), 0).label("output_tokens"),
+        )
+        .where(TelemetryEvent.event_type == "model.call.completed")
+        .where(provider_col.is_not(None))
+        .group_by(provider_col)
+    )
+    rows = (await session.execute(stmt)).all()
 
     cost_by_name = {p.name: p.cost_per_1k_tokens for p in profiles}
 
-    totals: dict[str, dict[str, int]] = {}
-    for event in events:
-        provider = event.payload.get("provider")
-        if not isinstance(provider, str):
-            continue
-        bucket = totals.setdefault(provider, {"calls": 0, "input_tokens": 0, "output_tokens": 0})
-        bucket["calls"] += 1
-        input_tokens = event.payload.get("input_tokens")
-        output_tokens = event.payload.get("output_tokens")
-        bucket["input_tokens"] += input_tokens if isinstance(input_tokens, int) else 0
-        bucket["output_tokens"] += output_tokens if isinstance(output_tokens, int) else 0
-
     result: list[ProviderUsage] = []
-    for provider, bucket in totals.items():
+    for provider, calls, input_tokens, output_tokens in rows:
         cost_per_1k = cost_by_name.get(provider)
-        total_tokens = bucket["input_tokens"] + bucket["output_tokens"]
+        total_tokens = input_tokens + output_tokens
         estimated_cost = (total_tokens / 1000) * cost_per_1k if cost_per_1k is not None else None
         result.append(
             ProviderUsage(
                 provider=provider,
-                call_count=bucket["calls"],
-                input_tokens=bucket["input_tokens"],
-                output_tokens=bucket["output_tokens"],
+                call_count=calls,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
                 cost_per_1k_tokens=cost_per_1k,
                 estimated_cost=estimated_cost,
             )

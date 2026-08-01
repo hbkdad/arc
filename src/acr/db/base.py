@@ -34,9 +34,19 @@ def _set_sqlite_pragmas(
     timeout. This is the first real multi-process contention ACR sees, not a
     data-volume problem. A generous busy_timeout is the second half of the
     fix: still fails eventually if something is actually stuck, but survives
-    an ordinary slow completion instead of a bare 5s default."""
+    an ordinary slow completion instead of a bare 5s default.
+
+    `synchronous=NORMAL` is WAL mode's standard pairing (SQLite's own docs
+    recommend it): under WAL, `FULL` fsyncs on every commit for a durability
+    guarantee this local single-user tool doesn't need, while `NORMAL`
+    fsyncs only at WAL checkpoints -- the worst case is losing the last
+    commit or two to an OS crash/power loss between checkpoints, never
+    corruption. A real, meaningful per-commit cost cut (fsync is
+    particularly slow on Windows) for a tool that commits once per
+    `run_task()` call and per telemetry emit."""
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA synchronous=NORMAL")
     cursor.execute("PRAGMA busy_timeout=30000")
     cursor.close()
 

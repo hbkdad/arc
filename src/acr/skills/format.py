@@ -9,14 +9,24 @@ may or may not use.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 MANIFEST_FILENAME = "SKILL.yaml"
 INSTRUCTIONS_FILENAME = "instructions.md"
+
+# `id` becomes a path segment: skills.evolution.create_candidate_version()
+# writes `data_dir / "generated_skills" / f"{id}@v{n}"` with no further
+# sanitization. Without this, a skill package registered with an id like
+# "../../../whatever" (a shared/downloaded package, not necessarily one
+# authored locally) would let a later `acr skills evolve` write a new
+# SKILL.yaml outside the intended directory -- an attacker-controlled file
+# write anywhere the process has permissions.
+_SAFE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.@-]*$")
 
 
 class SkillFormatError(ValueError):
@@ -27,6 +37,17 @@ class SkillManifest(BaseModel):
     """The exact required metadata set from master §655-676."""
 
     id: str
+
+    @field_validator("id")
+    @classmethod
+    def _id_must_be_a_safe_path_segment(cls, value: str) -> str:
+        if not _SAFE_ID_PATTERN.match(value) or ".." in value:
+            raise ValueError(
+                f"id {value!r} must be a safe path segment (letters, digits, '_', '-', '.', '@', "
+                "no path separators, no '..')"
+            )
+        return value
+
     name: str
     version: str
     description: str

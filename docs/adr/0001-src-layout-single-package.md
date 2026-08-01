@@ -42,6 +42,30 @@ domain modules (`acr.memory`, `acr.core`, ...) must not import from
 - `apps/dashboard`, `apps/website`, `apps/desktop` are not created until
   their phases (11, 14, 51) actually need them.
 
+## Update (2026-08-01): Phase 11 landed, and this decision held
+
+Phase 11 (Dashboard) is complete, and its trigger condition here — "once
+`apps/dashboard`... exist as real, separately deployed applications that
+need their own dependency graphs" — never actually fired: the dashboard
+is a FastAPI app served by `acr dashboard serve`, sharing the CLI's own
+process/dependency graph, not a separately deployed application. It
+landed as `acr.dashboard`, a submodule alongside `acr.cli`, exactly the
+pattern this ADR already described rather than a new `apps/dashboard`.
+This ADR's own prediction turned out correct, not just untested.
+
+One real exception this ADR didn't originally account for: `skills/`
+now exists at the repo root, alongside `src/`, holding ACR's first-party
+skill *packages* (`SKILL.yaml` + `instructions.md` content, not Python
+code) — `code-review-checklist`, `context-minimization`,
+`dashboard-design-elaborate`, `dashboard-ui-audit`, `ui-design-critique`.
+This doesn't contradict the single-package decision above (it's data
+`acr.skills.registry.register()` reads, not a second Python package,
+and the "Domain modules... map 1:1 to a future top-level directory"
+mapping above is unaffected) — see `docs/ARCHITECTURE.md`'s "First-party
+skill library" section for the full rationale. Noted here so a reader
+following this ADR alone doesn't come away thinking no top-level
+directory exists yet.
+
 ## Revisit when
 
 A second deployable Python app needs to share `acr.core`/`acr.memory` code,

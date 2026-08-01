@@ -1048,6 +1048,7 @@ followed.
 
 ```bash
 uv run acr doctor              # Python version, data dir, DB, mock + Ollama providers
+uv run acr setup                             # interactive first-run wizard (.env + provider keys)
 uv run acr version
 uv run acr run "objective" [--min-quality-tier N]  # 0=mock (default); raise for Ollama/cloud
 uv run acr context compile "objective" --budget 2000  # compile + print a ContextBundle
@@ -1080,7 +1081,7 @@ uv run acr skills compare-evolution <baseline-id> <candidate-id>
 uv run acr skills promote-evolution <baseline-id> <candidate-id>
 uv run acr skills rollback-evolution <active-id> <restore-id>
 uv run acr agents plan "objective" [--role X --token-budget N --task-class X]  # AgentSpec via real routing + exposure
-uv run acr agents spawn "objective" --task-class X [--force]  # required: closes the evidence loop -- see below
+uv run acr agents spawn "objective" --task-class X [--force] [--escalate] [--min-quality-tier N]  # required: closes the evidence loop -- see below
 uv run acr agents topology <task-class>                     # evidence-gated worker-count recommendation
 uv run acr explain <task-id>                 # replay a task's real telemetry trail, no narrative
 uv run acr learn failures "objective" [--task-class X --limit N]  # similar past FAILURE memories
@@ -2165,6 +2166,96 @@ replacing the hardcoded `MockProvider()` the CLI previously passed to
 when escalation is requested — the plain (non-`--escalate`) path is
 unchanged, so existing callers keep their current single-provider
 behavior.
+
+### Full system audit: security, architecture, tests, dashboard, docs (2026-08-01)
+
+Five parallel, independent audit passes (each blind to the others'
+findings) over the whole codebase, then fixes for every real, confirmed
+finding. Not a generic checklist run — each auditor was told to report
+only concrete, reproducible problems with a real failure scenario, and
+several categories came back clean (no SQL injection, no SSRF, no
+circular imports, no XSS — Jinja2 autoescaping is on everywhere and the
+dashboard's client JS never touches an HTML-sink API).
+
+**Fixed:**
+- `learning.consolidation.apply_gc_plan()` (memory archival) had no
+  `safe_mode` gate, despite `security.safe_mode`'s own docstring listing
+  "memory deletion" as safe-mode-disabled — the one real gap in an
+  otherwise-consistent gate (skill activation, recalibration, and
+  proposal approval were already covered). Added `safe_mode: bool = False`
+  + `require_not_safe_mode()`, matching the existing pattern.
+- `core.execution.engine.run_task()` wrote `Step.payload` directly to the
+  session, bypassing the `redact_mapping()` scrub that `TelemetryEvent`
+  payloads already get via `TelemetryRecorder` — a secret pasted into an
+  objective landed unredacted in the `steps` table. Now redacted at the
+  same three write sites (prompt, error, result).
+- `routing.models` mixed the provider-agnostic `ModelRouter`/`ModelProfile`
+  domain classes with `build_default_router()`'s concrete-provider wiring
+  (mock/Ollama/OpenAI/Anthropic adapters) in one file — the exact
+  dependency-direction violation CLAUDE.md's layout rule warns about, and
+  it meant importing `ModelRouter` for a unit test pulled in every
+  provider SDK. Split into `routing/factory.py` (composition root) +
+  `routing/models.py` (pure domain logic); `routing/__init__.py` still
+  re-exports both so no external caller's import path changed except
+  `cli.py`/`dashboard/app.py`/`mcp_server.py`, updated directly.
+- `cli.py`'s `models list` and `dashboard/app.py`'s `/routing` route had
+  independently grown the same `[(p, await p.provider.is_available())
+  for p in router.profiles]` comprehension — two copies that would drift
+  silently. Now a single `ModelRouter.availability()` method.
+- Untested failure path: `run_task()`'s `except Exception` branch (sets
+  run/task to FAILED, records the error Step) had never executed under
+  test — every prior test used `MockProvider`, which never raises. Added
+  a real failing-provider test asserting run/task status, the recorded
+  error Step, and the `model.call.failed`/`task.failed` telemetry.
+- Untested persistence path: `write_controller`'s `QUARANTINE` decision
+  was only ever asserted at the `evaluate()` return-value level, never
+  through `remember()`'s actual `apply()`/`session.add()` path. Added a
+  test that checks the row is really written with `QUARANTINED` status.
+- A `time.sleep(1.2)` in `test_dashboard_serve_opens_the_browser...`
+  raced a real background `threading.Timer` — fine on a quiet machine,
+  a real intermittent failure risk on a loaded CI runner. Replaced with
+  a poll loop (5s ceiling).
+- Dashboard accessibility: `overview.html`/`memory.html`/`tools.html`/
+  `routing.html` each had multiple `<h1>`s used as generic section
+  dividers (breaks single-h1 screen-reader document-outline navigation)
+  — demoted to the `<h2 class="section-label">` pattern the same
+  templates already used correctly elsewhere. The graph/timeline
+  `<canvas>` elements had no non-visual equivalent — added
+  `role="img"`/`aria-label`/`aria-describedby="graph-status"` plus real
+  fallback text. Removed one confirmed-dead CSS rule
+  (`.legend .swatch.diamond`, no template references it).
+- Docs drift: the CLI command cheat-sheet was missing `acr setup`
+  entirely and hadn't been updated with `agents spawn`'s `--escalate`/
+  `--min-quality-tier` flags from the same session. CLAUDE.md's repo
+  layout section described the literal multi-directory monorepo tree
+  with no pointer to [ADR-0001](adr/0001-src-layout-single-package.md),
+  which already explains the single-package decision — added the
+  pointer and restated the dependency-direction rule at the submodule
+  level.
+
+**Considered, deliberately not changed (recorded so it isn't rediscovered
+as an oversight):**
+- `memory.write_controller.remember()`/`apply()` has no `safe_mode` gate.
+  Unlike `gc_apply()`, the master spec's safe-mode section only names
+  *deletion* as disabled, not creation, and the write path already has
+  its own evidence gate (principle #22). Real ambiguity, not a bug —
+  needs a product decision, not a unilateral gate that could change
+  behavior a caller depends on.
+- `memory.temporal.at()`/`history()` and `create_fts`/`drop_fts` (both
+  `memory/fts.py` and `skills/fts.py`) are unreferenced by any
+  application code path today. Not deleted: `at()`/`history()` are the
+  Phase 2 "temporal memory queries" milestone's actual deliverable
+  (tested, intentional public API for future CLI/API consumers, not
+  incidental dead code), and the FTS create/drop pair mirrors that
+  same-module pattern. Confirmed real duplication between the two `fts.py`
+  files, but removing either risks deleting the wrong tested surface
+  under time pressure — worth a dedicated look, not a rushed cut.
+- `cli.py` is ~1830 lines across ~15 command domains with real repeated
+  `async def _x(): ...; asyncio.run(_x())` boilerplate (43 instances).
+  Confirmed, real, and worth doing — but splitting into `cli/agents.py`,
+  `cli/memory.py`, etc. touches every command's import path at once; too
+  large a surface to do safely as one item inside a broader audit pass.
+  Flagged for its own dedicated session.
 
 ## What's left
 

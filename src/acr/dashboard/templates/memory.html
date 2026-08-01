@@ -29,7 +29,7 @@
 {% endfor %}
 </div>
 
-<h1>Confidence calibration</h1>
+<h2 class="section-label">Confidence calibration</h2>
 <p class="lede">Does a memory's stored confidence actually predict how often it turns out useful? A fixed-bin reliability curve over records with at least one recorded use (<code>successful_uses + failed_uses</code>) -- {{ calibration.records_considered }} record(s) considered, {{ calibration.records_excluded_no_evidence }} excluded for having no recorded outcome yet.{% if calibration.brier_score is not none %} Brier score: <code>{{ "%.3f" | format(calibration.brier_score) }}</code> (lower is better-calibrated).{% endif %}</p>
 <div id="chart-calibration"></div>
 <script>
@@ -47,7 +47,7 @@
 })();
 </script>
 
-<h1>Recently updated</h1>
+<h2 class="section-label">Recently updated</h2>
 <div class="table-wrap">
 <table>
 <tr><th>Subject</th><th>Type</th><th>Status</th><th>Scope</th><th class="num">Confidence</th><th class="num">Utility</th><th>Updated</th></tr>

@@ -29,7 +29,7 @@ from acr.agents.planner import plan_agent
 from acr.config import Settings, get_settings
 from acr.core.execution import run_task as run_task_engine
 from acr.db.base import make_engine, make_session_factory
-from acr.routing.models import build_default_router
+from acr.routing.factory import build_default_router
 from acr.security.audit import record_audit_event
 from acr.security.permissions import Capability, PermissionDeniedError, PermissionSet
 from acr.telemetry.explain import TaskNotFoundError

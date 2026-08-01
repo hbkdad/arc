@@ -105,12 +105,8 @@ from acr.memory.models import MemoryRecord
 from acr.memory.write_controller import WriteEvaluation
 from acr.providers.base import CompletionRequest
 from acr.providers.mock import MockProvider
-from acr.routing.models import (
-    ModelProfile,
-    NoProviderAvailableError,
-    RoutedCompletion,
-    build_default_router,
-)
+from acr.routing.factory import build_default_router
+from acr.routing.models import NoProviderAvailableError, RoutedCompletion
 from acr.security.audit import recent_audit_events
 from acr.security.injection import scan_for_injection
 from acr.security.permissions import Capability, PermissionDeniedError, PermissionSet
@@ -590,10 +586,7 @@ def models_list() -> None:
     settings = get_settings()
     router = build_default_router(settings)
 
-    async def _availability() -> list[tuple[ModelProfile, bool]]:
-        return [(p, await p.provider.is_available()) for p in router.profiles]
-
-    for profile, available in asyncio.run(_availability()):
+    for profile, available in asyncio.run(router.availability()):
         status = "available" if available else "unavailable"
         typer.echo(
             f"{profile.name}\ttier={profile.quality_tier}\t"
@@ -1752,11 +1745,15 @@ def memory_gc_apply(
                 quarantined_retention_days=quarantined_retention_days,
                 stale_candidate_days=stale_candidate_days,
             )
-            applied = await apply_gc_plan(session, plan)
+            applied = await apply_gc_plan(session, plan, safe_mode=settings.safe_mode)
             await session.commit()
             return plan, applied
 
-    plan, applied = asyncio.run(_apply())
+    try:
+        plan, applied = asyncio.run(_apply())
+    except SafeModeError as exc:
+        typer.echo(f"denied: {exc}")
+        raise typer.Exit(code=1) from exc
     if not plan.actions:
         typer.echo(f"no records eligible for archival ({plan.considered} considered)")
         return

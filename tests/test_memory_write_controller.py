@@ -37,6 +37,20 @@ async def test_new_fact_without_evidence_is_quarantined(db_session: AsyncSession
     assert evaluation.decision is WriteDecision.QUARANTINE
 
 
+async def test_a_quarantined_fact_is_actually_persisted_with_quarantined_status(
+    db_session: AsyncSession,
+) -> None:
+    # evaluate() alone only asserts the *decision* -- this exercises the
+    # real remember()/apply() persistence path a bug in the QUARANTINE
+    # branch (wrong status, missing session.add) would otherwise slip
+    # through silently.
+    evaluation, record = await remember(db_session, _candidate(evidence=None))
+    assert evaluation.decision is WriteDecision.QUARANTINE
+    assert record is not None
+    assert record.status is MemoryStatus.QUARANTINED
+    assert record.id is not None
+
+
 async def test_high_confidence_evidence_backed_fact_is_confirmed(db_session: AsyncSession) -> None:
     evaluation, record = await remember(db_session, _candidate(confidence=0.9))
     assert evaluation.decision is WriteDecision.STORE_CONFIRMED

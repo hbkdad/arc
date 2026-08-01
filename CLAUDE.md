@@ -22,3 +22,5 @@ Read it in full before any implementation work. Do not ask for a summary in plac
 ## Repo layout
 
 Modular monorepo (master §5): `apps/`, `packages/`, `core/`, `memory/`, `context/`, `skills/`, `agents/`, `routing/`, `providers/`, `tools/`, `learning/`, `telemetry/`, `security/`, `benchmarks/`, `migrations/`, `tests/`, `scripts/`, `examples/`, `docs/`. Core domain logic must not depend on UI, provider implementations, or deployment platforms.
+
+Today this lives as one `src/acr/` package with each domain as a submodule (`acr.memory`, `acr.agents`, ...) rather than literal top-level directories — a deliberate, revisit-when-needed choice, not drift; see [docs/adr/0001-src-layout-single-package.md](docs/adr/0001-src-layout-single-package.md). The dependency-direction rule still applies at the submodule level: nothing under `acr.core`/`acr.memory`/etc. may import a concrete provider adapter or `acr.dashboard`/`acr.cli` — only `acr.providers.base`'s abstract interface.

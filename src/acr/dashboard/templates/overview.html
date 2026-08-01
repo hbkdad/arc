@@ -27,7 +27,7 @@
 })();
 </script>
 
-<h1>System health</h1>
+<h2 class="section-label">System health</h2>
 <div class="table-wrap">
 <table>
 <tr><th>Check</th><th>Status</th><th>Detail</th></tr>
@@ -37,7 +37,7 @@
 </table>
 </div>
 
-<h1>Task status</h1>
+<h2 class="section-label">Task status</h2>
 <div class="metric-grid">
 {% for status, n in task_counts.items() %}
 <a class="metric-card {{ status | pill_class }}" href="/tasks"><span class="n">{{ n }}</span><span class="label">{{ status }}</span></a>
@@ -46,7 +46,7 @@
 {% endfor %}
 </div>
 
-<h1>Event activity</h1>
+<h2 class="section-label">Event activity</h2>
 <div class="metric-grid">
 {% for event_type, n in event_counts.items() | sort(attribute="1", reverse=True) %}
 <a class="metric-card" href="/events?event_type={{ event_type }}"><span class="n">{{ n }}</span><span class="label">{{ event_type }}</span></a>

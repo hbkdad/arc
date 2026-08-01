@@ -23,6 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from acr.memory.models import MemoryRecord, MemoryStatus, MemoryType, utcnow
+from acr.security.safe_mode import require_not_safe_mode
 
 DEFAULT_SUPERSEDED_RETENTION_DAYS = 30
 DEFAULT_QUARANTINED_RETENTION_DAYS = 14
@@ -103,14 +104,20 @@ async def plan_gc(
     return GCPlan(actions=actions, considered=len(records))
 
 
-async def apply_gc_plan(session: AsyncSession, plan: GCPlan) -> int:
+async def apply_gc_plan(session: AsyncSession, plan: GCPlan, *, safe_mode: bool = False) -> int:
     """Apply a plan `plan_gc()` produced. Re-fetches each record by id and
     re-checks `current_status` rather than trusting the plan's in-memory
     snapshot, since the caller may review a plan across a separate
     request/process boundary before applying it (the CLI does exactly
     this: one invocation prints the plan, `--apply` on a second invocation
     actually mutates) -- a record that changed status in between is
-    skipped, not fought over."""
+    skipped, not fought over.
+
+    `safe_mode.py`'s own docstring lists "memory deletion" as safe-mode
+    -disabled; archival is exactly that operation, so this is gated the
+    same way `skills.registry.set_status()` gates activation.
+    """
+    require_not_safe_mode(safe_mode, "memory.gc_apply")
     applied = 0
     for action in plan.actions:
         record = await session.get(MemoryRecord, action.memory_id)

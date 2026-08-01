@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from acr.learning.consolidation import apply_gc_plan, plan_gc
 from acr.memory import MemoryCandidate, MemoryScope, MemoryStatus, MemoryType
 from acr.memory.models import utcnow
 from acr.memory.write_controller import remember
+from acr.security.safe_mode import SafeModeError
 
 
 async def _write(
@@ -134,3 +136,14 @@ async def test_apply_gc_plan_skips_a_record_that_changed_status_since_the_plan(
     assert applied == 0
     await db_session.refresh(record)
     assert record.status is MemoryStatus.CONFIRMED
+
+
+async def test_apply_gc_plan_is_denied_in_safe_mode(db_session: AsyncSession) -> None:
+    record = await _write(db_session, status=MemoryStatus.SUPERSEDED, age_days=45)
+    plan = await plan_gc(db_session, superseded_retention_days=30)
+
+    with pytest.raises(SafeModeError):
+        await apply_gc_plan(db_session, plan, safe_mode=True)
+
+    await db_session.refresh(record)
+    assert record.status is MemoryStatus.SUPERSEDED

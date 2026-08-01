@@ -24,8 +24,8 @@
   <span class="item">bar length = time from creation to last update (or now, if still running)</span>
 </div>
 <div class="table-wrap" style="padding: 0.5rem;">
-<canvas id="graph" width="900" height="560" style="width:100%; max-width:900px; display:block; cursor:default;"></canvas>
-<canvas id="timeline" width="900" height="420" style="width:100%; max-width:900px; display:none; cursor:default;"></canvas>
+<canvas id="graph" width="900" height="560" role="img" aria-label="Node-link graph of ACR's entities and their real connections" aria-describedby="graph-status" style="width:100%; max-width:900px; display:block; cursor:default;">Your browser doesn't support the canvas element needed to draw this graph. The legend above and the table views (Tasks, Memory, Tools) cover the same underlying data.</canvas>
+<canvas id="timeline" width="900" height="420" role="img" aria-label="Timeline of task duration and status" aria-describedby="graph-status" style="width:100%; max-width:900px; display:none; cursor:default;">Your browser doesn't support the canvas element needed to draw this timeline. See the Tasks page for the same data in table form.</canvas>
 </div>
 <p id="graph-status" class="empty">connecting…</p>
 <script src="/static/visualization.js"></script>

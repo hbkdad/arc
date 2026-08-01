@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from acr.core.tasks.models import Step, StepKind, Task, TaskRun, TaskStatus
 from acr.providers.base import CompletionRequest, ModelProvider
+from acr.security.secrets import redact_mapping
 from acr.telemetry.recorder import TelemetryRecorder
 
 
@@ -50,7 +51,7 @@ async def run_task(
             index=0,
             kind=StepKind.ACTION,
             name="model.complete",
-            payload={"prompt": objective},
+            payload=redact_mapping({"prompt": objective}),
         )
     )
     await telemetry.emit(
@@ -66,7 +67,7 @@ async def run_task(
                 index=1,
                 kind=StepKind.OBSERVATION,
                 name="model.error",
-                payload={"error": f"{type(exc).__name__}: {exc}"},
+                payload=redact_mapping({"error": f"{type(exc).__name__}: {exc}"}),
             )
         )
         await telemetry.emit(
@@ -88,11 +89,13 @@ async def run_task(
             index=1,
             kind=StepKind.OBSERVATION,
             name="model.result",
-            payload={
-                "text": result.text,
-                "input_tokens": result.input_tokens,
-                "output_tokens": result.output_tokens,
-            },
+            payload=redact_mapping(
+                {
+                    "text": result.text,
+                    "input_tokens": result.input_tokens,
+                    "output_tokens": result.output_tokens,
+                }
+            ),
         )
     )
     await telemetry.emit(

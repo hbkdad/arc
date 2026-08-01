@@ -34,7 +34,7 @@ from acr.db.base import make_engine, make_session_factory
 from acr.doctor import run_checks
 from acr.evaluation.calibration import compute_calibration
 from acr.learning.proposals import ProposalStatus, list_proposals
-from acr.routing.models import ModelProfile, build_default_router
+from acr.routing.factory import build_default_router
 from acr.security.audit import recent_audit_events
 from acr.skills.registry import list_skills
 from acr.telemetry.usage import ProviderUsage, usage_by_provider
@@ -304,9 +304,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         request: Request, session: AsyncSession = Depends(get_session)
     ) -> HTMLResponse:
         router = build_default_router(settings)
-        availability: list[tuple[ModelProfile, bool]] = [
-            (profile, await profile.provider.is_available()) for profile in router.profiles
-        ]
+        availability = await router.availability()
         usage = await usage_by_provider(session, router.profiles)
         return templates.TemplateResponse(
             request,

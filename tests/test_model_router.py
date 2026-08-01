@@ -4,14 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from acr.config import Settings
 from acr.providers.base import CompletionRequest, CompletionResult, ModelProvider
-from acr.routing.models import (
-    ModelProfile,
-    ModelRouter,
-    NoProviderAvailableError,
-    build_default_router,
-)
+from acr.routing.models import ModelProfile, ModelRouter, NoProviderAvailableError
 
 
 class _FakeProvider(ModelProvider):
@@ -169,18 +163,3 @@ async def test_complete_with_escalation_raises_with_the_last_error_when_every_ca
     )
     with pytest.raises(NoProviderAvailableError, match="two"):
         await router.complete_with_escalation(CompletionRequest(prompt="hi"))
-
-
-def test_build_default_router_includes_mock_ollama_and_cloud_profiles() -> None:
-    router = build_default_router(Settings())
-    names = {p.name for p in router.profiles}
-    assert names == {"mock", "ollama", "openai_compatible", "anthropic_compatible"}
-
-
-async def test_build_default_router_mock_is_always_available() -> None:
-    router = build_default_router(Settings())
-    selected = await router.select()
-    # mock is tier 0 cost 0.0 so it's always the cheapest available choice
-    # unless ollama also happens to be reachable at cost 0.0 too — either
-    # way, a low/no-cost local profile must win over any cloud profile.
-    assert selected.cost_per_1k_tokens == 0.0

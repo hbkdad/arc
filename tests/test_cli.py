@@ -220,7 +220,13 @@ def test_dashboard_serve_opens_the_browser_when_requested(
     result = runner.invoke(
         app, ["dashboard", "serve", "--host", "127.0.0.1", "--port", "8765", "--open-browser"]
     )
-    time.sleep(1.2)  # the real 1s delayed-open Timer fires on its own thread
+    # Poll rather than a fixed sleep -- the real 1s delayed-open Timer fires
+    # on its own thread, and a loaded CI runner may not have crossed that
+    # 1s mark by a fixed 1.2s checkpoint. Poll well past the 1s delay
+    # instead of gambling on a single fixed wait.
+    deadline = time.monotonic() + 5.0
+    while not opened and time.monotonic() < deadline:
+        time.sleep(0.05)
 
     assert result.exit_code == 0
     assert opened == ["http://127.0.0.1:8765"]
@@ -1101,6 +1107,21 @@ def test_memory_gc_plan_then_apply_archives_an_old_superseded_record(
 
     second_plan = runner.invoke(app, ["memory", "gc-plan"])
     assert "no records eligible" in second_plan.stdout
+
+
+def test_memory_gc_apply_denied_cleanly_in_safe_mode(
+    monkeypatch: pytest.MonkeyPatch, migrated_settings: Settings
+) -> None:
+    from acr.config import get_settings
+
+    _seed_old_superseded_memory(migrated_settings)
+    monkeypatch.setenv("ACR_SAFE_MODE", "1")
+    get_settings.cache_clear()
+
+    result = runner.invoke(app, ["memory", "gc-apply"])
+
+    assert result.exit_code == 1
+    assert "denied" in result.stdout
 
 
 def _seed_evidenced_memory(

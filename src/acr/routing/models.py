@@ -13,12 +13,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from acr.config import Settings
-from acr.providers.anthropic_compatible import AnthropicCompatibleProvider
 from acr.providers.base import CompletionRequest, CompletionResult, ModelProvider
-from acr.providers.mock import MockProvider
-from acr.providers.ollama import OllamaProvider
-from acr.providers.openai_compatible import OpenAICompatibleProvider
 
 
 class NoProviderAvailableError(RuntimeError):
@@ -49,6 +44,13 @@ class ModelRouter:
     @property
     def profiles(self) -> list[ModelProfile]:
         return list(self._profiles)
+
+    async def availability(self) -> list[tuple[ModelProfile, bool]]:
+        """Each profile paired with its live `is_available()` check --
+        the CLI's `models list` and the dashboard's `/routing` page both
+        need exactly this, and had each grown their own copy of the same
+        list comprehension before this existed."""
+        return [(profile, await profile.provider.is_available()) for profile in self._profiles]
 
     async def select(self, *, min_quality_tier: int = 0) -> ModelProfile:
         """The cheapest available profile meeting `min_quality_tier`."""
@@ -115,38 +117,3 @@ class ModelRouter:
                 ) from last_error
             raise NoProviderAvailableError("no configured provider is available")
         return RoutedCompletion(result=last_result, tried_profiles=tried, escalated=len(tried) > 1)
-
-
-def build_default_router(settings: Settings) -> ModelRouter:
-    """The standard escalation ladder: mock (always available, tier 0) ->
-    local Ollama (tier 1, free) -> configured cloud providers (tier 2, paid).
-
-    Cloud profiles are included even without an API key — `ModelRouter`
-    skips unavailable profiles via `is_available()`, so this list is "what
-    ACR knows how to route to", not "what's currently usable".
-    """
-    return ModelRouter(
-        [
-            ModelProfile(
-                provider=MockProvider(), name="mock", cost_per_1k_tokens=0.0, quality_tier=0
-            ),
-            ModelProfile(
-                provider=OllamaProvider(model=settings.ollama_model),
-                name="ollama",
-                cost_per_1k_tokens=0.0,
-                quality_tier=1,
-            ),
-            ModelProfile(
-                provider=OpenAICompatibleProvider(api_key=settings.openai_api_key),
-                name="openai_compatible",
-                cost_per_1k_tokens=0.15,
-                quality_tier=2,
-            ),
-            ModelProfile(
-                provider=AnthropicCompatibleProvider(api_key=settings.anthropic_api_key),
-                name="anthropic_compatible",
-                cost_per_1k_tokens=0.25,
-                quality_tier=2,
-            ),
-        ]
-    )

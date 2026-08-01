@@ -2497,6 +2497,40 @@ needs adjusting the underlying semantic color tokens per theme, a real
 design pass, not a mechanical percentage change — deferred as its own
 task rather than forced through under a "quality check."
 
+## Release: v0.2.0 (2026-08-01)
+
+`v0.1.0` (2026-07-29) was the first PyPI release. In the 45 commits since,
+enough real functionality landed to warrant a second: this is a minor
+version bump under pre-1.0 semver (new backward-compatible functionality,
+not just fixes). Highlights, each covered in its own dated section above:
+
+- **Per-role tiered routing** — `spawn_agent_with_escalation()`: start
+  cheap, only pay for a higher quality tier if the cheap attempt fails
+  review.
+- **Paired trajectory auditing** — `acr skills audit-trajectory`: a real
+  LLM judge compares a baseline and candidate skill on the same live
+  objective before a promotion proposal is made, not a synthetic score.
+- **Dashboard `/settings` page** — configure Claude/OpenAI API keys from
+  the browser, live in-process, no restart.
+- **A third dashboard theme (Observatory)** — designed by actually running
+  ACR's own trial-and-error skill-evolution loop against a local Ollama
+  model, not hand-picked.
+- **Two full security/architecture/test/dashboard/docs audits**, the
+  second adding a performance dimension, with real fixes: a critical
+  approve-flow crash (`EvolutionComparison(**proposal.payload)` on an
+  audited proposal), a judge-verdict false-positive risk, a CSRF gap on
+  the first mutating dashboard route, a skill-ID path-traversal risk, a
+  prompt-injection surface in the trajectory judge, a `.env` test-isolation
+  gap, and a SQL-side rewrite of `usage_by_provider()` for a route polled
+  every 2 seconds.
+- **`.github/FUNDING.yml`** + a Ko-fi support link across
+  `README.md`/`CONTRIBUTING.md`.
+
+Full command reference for this release: the "ACR CLI Guide" artifact
+built this session (getting-started, core concepts, every command by
+area, and a support section) — not checked into the repo, but every
+command in it was verified against `src/acr/cli.py` as of this commit.
+
 ## What's left
 
 Every phase in the master spec's 15-phase list (§65-66) now has a

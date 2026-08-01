@@ -3,7 +3,7 @@
 # 2011 CMS package). The installed CLI command stays `acr` regardless
 # ([project.scripts] below); only `pip install <name>` changes.
 name = "acr-runtime"
-version = "0.1.0"
+version = "0.2.0"
 description = "ACR — Adaptive Cognitive Runtime: a local-first, model-independent AI orchestration and cognitive runtime."
 readme = "README.md"
 license = "MIT"

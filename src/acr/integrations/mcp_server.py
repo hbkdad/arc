@@ -24,6 +24,7 @@ from typing import Any
 from mcp.server.mcpserver import MCPServer
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from acr import __version__
 from acr.agents.factory import spawn_agent
 from acr.agents.planner import plan_agent
 from acr.config import Settings, get_settings
@@ -64,7 +65,7 @@ def create_mcp_server(settings: Settings | None = None) -> MCPServer:
         name="acr",
         title="ACR — Adaptive Cognitive Runtime",
         description="Local-first memory, skills, and task execution.",
-        version="0.1.0",
+        version=__version__,
     )
 
     @server.tool(description="Keyword search over ACR's local memory store.")

@@ -68,3 +68,9 @@ Guiding rules that apply to any contribution, not just AI-assisted ones:
 
 See [`SECURITY.md`](SECURITY.md) — please don't use a public issue for
 these.
+
+## Support
+
+Contributions (code, docs, bug reports) are the most valuable kind of
+support. If you'd also like to support development financially:
+[ko-fi.com/hbkcustomsinc](https://ko-fi.com/hbkcustomsinc).

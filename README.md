@@ -91,3 +91,6 @@ uv run pyright           # type check
 [MIT licensed](LICENSE). See [`SECURITY.md`](SECURITY.md) to report a
 vulnerability privately. For bugs, questions, or feature requests, use
 [GitHub Issues](https://github.com/hbkdad/arc/issues).
+
+If ACR is useful to you, consider supporting its development:
+[ko-fi.com/hbkcustomsinc](https://ko-fi.com/hbkcustomsinc).

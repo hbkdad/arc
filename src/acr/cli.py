@@ -16,7 +16,12 @@ from pathlib import Path
 import typer
 
 from acr import __version__
-from acr.agents.factory import SpawnNotWorthwhileError, estimate_spawn, spawn_agent
+from acr.agents.factory import (
+    SpawnNotWorthwhileError,
+    estimate_spawn,
+    spawn_agent,
+    spawn_agent_with_escalation,
+)
 from acr.agents.models import AgentSpec, SpawnEstimate
 from acr.agents.planner import plan_agent
 from acr.agents.topology import (
@@ -1260,6 +1265,16 @@ def agents_spawn(
     force: bool = typer.Option(
         False, "--force", help="Spawn even if the spawn estimate recommends against it."
     ),
+    escalate: bool = typer.Option(
+        False,
+        "--escalate",
+        help="Start at the cheapest available model tier and only pay for a pricier one "
+        "if the cheap attempt's own review fails, via ModelRouter.complete_with_escalation()'s "
+        "same ascending-tier ladder applied at the whole-task level.",
+    ),
+    min_quality_tier: int = typer.Option(
+        0, "--min-quality-tier", help="Lowest tier `--escalate` is allowed to start from."
+    ),
 ) -> None:
     """Plan an agent, then run it end to end via the task engine and review the result."""
     settings = get_settings()
@@ -1274,14 +1289,26 @@ def agents_spawn(
                 session, objective=objective, task_class=task_class, limit=3
             )
             try:
-                result = await spawn_agent(
-                    session,
-                    spec,
-                    MockProvider(),
-                    TelemetryRecorder(),
-                    task_class=task_class,
-                    force=force,
-                )
+                if escalate:
+                    router = build_default_router(settings)
+                    result = await spawn_agent_with_escalation(
+                        session,
+                        spec,
+                        router,
+                        TelemetryRecorder(),
+                        task_class=task_class,
+                        min_quality_tier=min_quality_tier,
+                        force=force,
+                    )
+                else:
+                    result = await spawn_agent(
+                        session,
+                        spec,
+                        MockProvider(),
+                        TelemetryRecorder(),
+                        task_class=task_class,
+                        force=force,
+                    )
             except SpawnNotWorthwhileError:
                 return spec, estimate, similar, None
             await session.commit()

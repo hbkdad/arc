@@ -2125,6 +2125,47 @@ already drifted (the same pattern `apply_gc_plan()` uses). `acr improve
 propose-recalibration` scans and proposes for every record found in one
 pass.
 
+### Per-role tiered routing: `spawn_agent_with_escalation()` (2026-08-01)
+
+The second of three build items approved from the competitive-research
+pass. The motivating example (Cursor's agent swarm: $9,373 for an
+all-frontier-model run vs $411 for a cheap-worker/pricier-verifier run)
+doesn't map onto ACR's architecture the way it first looked like it would
+— reading `agents/planner.py` and `agents/critic.py` in full confirmed
+both `plan_agent()` and `review_agent_task()` are entirely deterministic
+today (real skill/tool routing and a rule-based checklist, zero LLM
+calls). There's no existing multi-role *call* structure to put different
+cost tiers on.
+
+What *does* already exist: `routing.models.ModelRouter
+.complete_with_escalation()` — a real, tested primitive that tries the
+cheapest qualifying model first and escalates only if a caller's `verify`
+callback rejects the result. Nothing called it. `spawn_agent()` takes one
+pre-resolved `provider` and uses it unconditionally — the router and the
+agent-spawn layer were built independently and never connected. That's
+the actual, evidenced gap this closes, not an invented feature.
+
+`agents.factory.spawn_agent_with_escalation()` applies the same
+ascending-tier, skip-unavailable, skip-erroring candidate order at the
+whole-task level instead of the single-completion level, since
+`run_task()` owns the Task/Step/telemetry lifecycle and doesn't expose a
+`verify` hook into its internal `provider.complete()` call — retrofitting
+that would mean duplicating `run_task()`'s bookkeeping inside the agent
+layer. Each tier tried is instead a full, separate `run_task()` call:
+cheapest tier first, and only if `review_agent_task()` fails it does the
+next tier run. A failed cheap attempt is never hidden or merged into a
+single narrative — both the failed and the eventual successful task
+appear in telemetry and topology history (`model_names` lists every tier
+actually tried, e.g. `["cheap-tier", "pricey-tier"]`), matching this
+session's standing rule against fabricating what happened.
+
+`acr agents spawn --escalate [--min-quality-tier N]` wires it in,
+replacing the hardcoded `MockProvider()` the CLI previously passed to
+`spawn_agent()` unconditionally with `build_default_router(settings)`
+when escalation is requested — the plain (non-`--escalate`) path is
+unchanged, so existing callers keep their current single-provider
+behavior.
+
 ## What's left
 
 Every phase in the master spec's 15-phase list (§65-66) now has a

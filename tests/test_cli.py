@@ -882,6 +882,19 @@ def test_agents_spawn_runs_end_to_end_with_force(migrated_settings: Settings) ->
     assert "review: passed=True" in result.stdout
 
 
+def test_agents_spawn_with_escalate_runs_end_to_end(migrated_settings: Settings) -> None:
+    # No cloud keys are configured in the test env, so the router's only
+    # available tier is mock (tier 0) -- this exercises the --escalate
+    # wiring itself (spawn_agent_with_escalation() via build_default_router()),
+    # not multi-tier escalation, which test_agents_factory.py covers directly.
+    result = runner.invoke(
+        app, ["agents", "spawn", "say hello", "--task-class", "greeting", "--force", "--escalate"]
+    )
+    assert result.exit_code == 0
+    assert "completed" in result.stdout
+    assert "review: passed=True" in result.stdout
+
+
 def test_agents_spawn_requires_a_task_class(migrated_settings: Settings) -> None:
     # No classifier exists to infer one -- guessing would silently
     # misattribute the resulting skill-outcome/topology evidence. Typer

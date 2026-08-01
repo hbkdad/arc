@@ -19,6 +19,7 @@ from acr.core.tasks.models import Task
 from acr.evaluation.panel import PanelResult
 from acr.learning.utility import record_skill_outcome
 from acr.providers.base import ModelProvider
+from acr.routing.models import ModelRouter, NoProviderAvailableError
 from acr.telemetry.recorder import TelemetryRecorder
 
 _COORDINATION_OVERHEAD_PER_GRANT = 0.05
@@ -105,6 +106,84 @@ async def spawn_agent(
     task = await run_task(session, spec.objective, provider, telemetry)
     review = review_agent_task(task)
 
+    await _record_evidence(
+        session,
+        spec=spec,
+        task_class=task_class,
+        model_names=[provider.name],
+        review=review,
+    )
+
+    return task, review
+
+
+async def spawn_agent_with_escalation(
+    session: AsyncSession,
+    spec: AgentSpec,
+    router: ModelRouter,
+    telemetry: TelemetryRecorder,
+    *,
+    task_class: str,
+    min_quality_tier: int = 0,
+    force: bool = False,
+) -> tuple[Task, PanelResult]:
+    """Like `spawn_agent()`, but starts at the cheapest tier `router` offers
+    and only pays for a pricier one when the cheap attempt's own review
+    fails, instead of running unconditionally on one pre-resolved provider.
+
+    `routing.models.ModelRouter.complete_with_escalation()` already
+    implements exactly this cheap-first/escalate-on-rejection tradeoff for a
+    single completion, but nothing called it — `spawn_agent()` takes one
+    resolved `provider` and never revisits that choice. Reusing it here
+    would require threading a `verify` callback through `run_task()`'s
+    internal `provider.complete()` call, which `run_task()` doesn't expose;
+    reusing the same ascending-tier, skip-unavailable, skip-erroring
+    candidate order at the whole-task level instead needs no change to
+    `run_task()` or its Task/Step/telemetry model.
+
+    Each tier tried is a real, separate `run_task()` call -- a failed cheap
+    attempt is never hidden or merged into a single fabricated narrative;
+    both the failed and the eventual successful task show up in telemetry
+    and topology history exactly as they happened.
+    """
+    estimate = estimate_spawn(spec)
+    if not estimate.worth_spawning and not force:
+        raise SpawnNotWorthwhileError(estimate)
+
+    tiers = sorted({p.quality_tier for p in router.profiles if p.quality_tier >= min_quality_tier})
+    if not tiers:
+        raise NoProviderAvailableError(f"no profile meets min_quality_tier={min_quality_tier}")
+
+    tried_models: list[str] = []
+    task: Task | None = None
+    review: PanelResult | None = None
+    for tier in tiers:
+        profile = await router.select(min_quality_tier=tier)
+        if profile.name in tried_models:
+            continue
+        tried_models.append(profile.name)
+        task = await run_task(session, spec.objective, profile.provider, telemetry)
+        review = review_agent_task(task)
+        if review.passed:
+            break
+
+    assert task is not None and review is not None
+
+    await _record_evidence(
+        session, spec=spec, task_class=task_class, model_names=tried_models, review=review
+    )
+
+    return task, review
+
+
+async def _record_evidence(
+    session: AsyncSession,
+    *,
+    spec: AgentSpec,
+    task_class: str,
+    model_names: list[str],
+    review: PanelResult,
+) -> None:
     for skill_id in spec.skills:
         await record_skill_outcome(session, skill_id, success=review.passed)
 
@@ -112,10 +191,8 @@ async def spawn_agent(
         session,
         task_class=task_class,
         worker_count=1,
-        model_names=[provider.name],
+        model_names=model_names,
         skill_ids=spec.skills,
         quality_score=review.mean_score,
         succeeded=review.passed,
     )
-
-    return task, review

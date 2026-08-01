@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from acr.config import Settings
 from acr.learning.proposals import (
+    MemoryRecordNotFoundError,
     ProposalKind,
     ProposalNotFoundError,
     ProposalNotPendingError,
@@ -16,12 +17,17 @@ from acr.learning.proposals import (
     SelfImprovementDisabledError,
     approve_proposal,
     list_proposals,
+    propose_memory_recalibration,
     propose_routing_optimization,
     propose_skill_evolution,
     reject_proposal,
 )
 from acr.learning.routing_optimization import ModelOutcome
+from acr.memory import MemoryCandidate, MemoryScope, MemoryType
+from acr.memory.models import MemoryRecord
+from acr.memory.write_controller import remember
 from acr.security.audit import recent_audit_events
+from acr.security.safe_mode import SafeModeError
 from acr.skills.evolution import create_candidate_version
 from acr.skills.models import SkillStatus
 from acr.skills.registry import SkillNotFoundError, get, register, set_status
@@ -356,3 +362,179 @@ async def test_propose_and_approve_are_audit_logged(
     actions = {e.payload.get("action") for e in events}
     assert f"proposal.create:{proposal.id}" in actions
     assert f"proposal.approve:{proposal.id}" in actions
+
+
+async def _seed_evidenced_memory(
+    db_session: AsyncSession, *, confidence: float, successful_uses: int, failed_uses: int
+) -> str:
+    _evaluation, record = await remember(
+        db_session,
+        MemoryCandidate(
+            type=MemoryType.SEMANTIC,
+            scope=MemoryScope.PROJECT,
+            subject="acr.recalibration.test",
+            content="a memory record for recalibration testing",
+            source_type="session",
+            confidence=confidence,
+            evidence="observed directly",
+        ),
+    )
+    assert record is not None
+    record.successful_uses = successful_uses
+    record.failed_uses = failed_uses
+    await db_session.flush()
+    return record.id
+
+
+async def test_propose_memory_recalibration_creates_a_pending_proposal_for_a_real_gap(
+    migrated_settings: Settings, db_session: AsyncSession
+) -> None:
+    # confidence 0.9, real empirical rate 1/5=0.2 -- a 0.7 gap.
+    record_id = await _seed_evidenced_memory(
+        db_session, confidence=0.9, successful_uses=1, failed_uses=4
+    )
+
+    proposal = await propose_memory_recalibration(
+        db_session, migrated_settings, TelemetryRecorder(), record_id=record_id
+    )
+    await db_session.commit()
+
+    assert proposal is not None
+    assert proposal.kind is ProposalKind.MEMORY_RECALIBRATION
+    assert proposal.status is ProposalStatus.PENDING
+    assert proposal.payload["old_confidence"] == 0.9
+    assert proposal.payload["new_confidence"] == 0.2
+
+
+async def test_propose_memory_recalibration_returns_none_for_a_well_calibrated_record(
+    migrated_settings: Settings, db_session: AsyncSession
+) -> None:
+    record_id = await _seed_evidenced_memory(
+        db_session, confidence=0.9, successful_uses=9, failed_uses=1
+    )
+
+    proposal = await propose_memory_recalibration(
+        db_session, migrated_settings, TelemetryRecorder(), record_id=record_id
+    )
+
+    assert proposal is None
+
+
+async def test_propose_memory_recalibration_returns_none_below_min_uses(
+    migrated_settings: Settings, db_session: AsyncSession
+) -> None:
+    record_id = await _seed_evidenced_memory(
+        db_session, confidence=0.9, successful_uses=0, failed_uses=1
+    )
+
+    proposal = await propose_memory_recalibration(
+        db_session, migrated_settings, TelemetryRecorder(), record_id=record_id, min_uses=3
+    )
+
+    assert proposal is None
+
+
+async def test_propose_memory_recalibration_raises_for_an_unknown_record(
+    migrated_settings: Settings, db_session: AsyncSession
+) -> None:
+    with pytest.raises(MemoryRecordNotFoundError):
+        await propose_memory_recalibration(
+            db_session, migrated_settings, TelemetryRecorder(), record_id="does-not-exist"
+        )
+
+
+async def test_propose_memory_recalibration_raises_when_self_improvement_disabled(
+    migrated_settings: Settings, db_session: AsyncSession
+) -> None:
+    migrated_settings.self_improvement_enabled = False
+    record_id = await _seed_evidenced_memory(
+        db_session, confidence=0.9, successful_uses=1, failed_uses=4
+    )
+
+    with pytest.raises(SelfImprovementDisabledError):
+        await propose_memory_recalibration(
+            db_session, migrated_settings, TelemetryRecorder(), record_id=record_id
+        )
+
+
+async def test_propose_memory_recalibration_auto_applies_when_configured(
+    migrated_settings: Settings, db_session: AsyncSession
+) -> None:
+    migrated_settings.auto_apply_proposals = True
+    record_id = await _seed_evidenced_memory(
+        db_session, confidence=0.9, successful_uses=1, failed_uses=4
+    )
+
+    proposal = await propose_memory_recalibration(
+        db_session, migrated_settings, TelemetryRecorder(), record_id=record_id
+    )
+    await db_session.commit()
+
+    assert proposal is not None
+    assert proposal.status is ProposalStatus.AUTO_APPLIED
+    record = await db_session.get(MemoryRecord, record_id)
+    assert record is not None
+    assert record.confidence == pytest.approx(0.2)
+
+
+async def test_propose_memory_recalibration_respects_safe_mode(
+    migrated_settings: Settings, db_session: AsyncSession
+) -> None:
+    migrated_settings.auto_apply_proposals = True
+    migrated_settings.safe_mode = True
+    record_id = await _seed_evidenced_memory(
+        db_session, confidence=0.9, successful_uses=1, failed_uses=4
+    )
+
+    with pytest.raises(SafeModeError):
+        await propose_memory_recalibration(
+            db_session, migrated_settings, TelemetryRecorder(), record_id=record_id
+        )
+
+
+async def test_approving_a_recalibration_proposal_corrects_the_records_confidence(
+    migrated_settings: Settings, db_session: AsyncSession
+) -> None:
+    record_id = await _seed_evidenced_memory(
+        db_session, confidence=0.9, successful_uses=1, failed_uses=4
+    )
+    proposal = await propose_memory_recalibration(
+        db_session, migrated_settings, TelemetryRecorder(), record_id=record_id
+    )
+    await db_session.commit()
+    assert proposal is not None
+
+    await approve_proposal(db_session, TelemetryRecorder(), proposal.id)
+    await db_session.commit()
+
+    record = await db_session.get(MemoryRecord, record_id)
+    assert record is not None
+    assert record.confidence == pytest.approx(0.2)
+
+
+async def test_approving_a_recalibration_proposal_is_a_no_op_if_confidence_already_drifted(
+    migrated_settings: Settings, db_session: AsyncSession
+) -> None:
+    record_id = await _seed_evidenced_memory(
+        db_session, confidence=0.9, successful_uses=1, failed_uses=4
+    )
+    proposal = await propose_memory_recalibration(
+        db_session, migrated_settings, TelemetryRecorder(), record_id=record_id
+    )
+    await db_session.commit()
+    assert proposal is not None
+
+    # Something else already changed the record's confidence since the
+    # proposal was created -- re-check-before-mutate must refuse to
+    # clobber it, the same staleness guard apply_gc_plan() uses.
+    record = await db_session.get(MemoryRecord, record_id)
+    assert record is not None
+    record.confidence = 0.55
+    await db_session.flush()
+
+    await approve_proposal(db_session, TelemetryRecorder(), proposal.id)
+    await db_session.commit()
+
+    record = await db_session.get(MemoryRecord, record_id)
+    assert record is not None
+    assert record.confidence == 0.55

@@ -981,6 +981,57 @@ def test_improve_propose_routing_optimization_reports_insufficient_evidence(
     assert "insufficient evidence" in result.stdout
 
 
+def _seed_evidenced_memory_for_recalibration(
+    settings: Settings, *, confidence: float, successful_uses: int, failed_uses: int
+) -> None:
+    from acr.memory import MemoryCandidate, MemoryScope, MemoryType
+    from acr.memory.write_controller import remember
+
+    async def _write() -> None:
+        engine = make_engine(settings)
+        factory = make_session_factory(engine)
+        async with factory() as session:
+            _evaluation, record = await remember(
+                session,
+                MemoryCandidate(
+                    type=MemoryType.SEMANTIC,
+                    scope=MemoryScope.PROJECT,
+                    subject="acr.cli.recalibration.test",
+                    content="a memory record for the recalibration CLI test",
+                    source_type="session",
+                    confidence=confidence,
+                    evidence="observed directly",
+                ),
+            )
+            assert record is not None
+            record.successful_uses = successful_uses
+            record.failed_uses = failed_uses
+            await session.commit()
+        await engine.dispose()
+
+    asyncio.run(_write())
+
+
+def test_improve_propose_recalibration_reports_no_records_with_no_data(
+    migrated_settings: Settings,
+) -> None:
+    result = runner.invoke(app, ["improve", "propose-recalibration"])
+
+    assert result.exit_code == 0
+    assert "no records miscalibrated" in result.stdout
+
+
+def test_improve_propose_recalibration_end_to_end(migrated_settings: Settings) -> None:
+    _seed_evidenced_memory_for_recalibration(
+        migrated_settings, confidence=0.9, successful_uses=1, failed_uses=4
+    )
+
+    result = runner.invoke(app, ["improve", "propose-recalibration"])
+
+    assert result.exit_code == 0
+    assert "[pending]" in result.stdout
+
+
 def _seed_old_superseded_memory(settings: Settings) -> None:
     from datetime import timedelta
 

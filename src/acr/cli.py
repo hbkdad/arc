@@ -42,7 +42,13 @@ from acr.dashboard.app import create_app as create_dashboard_app
 from acr.db.base import session_scope
 from acr.db.migrate import upgrade_to_head
 from acr.doctor import CheckStatus, run_checks
-from acr.evaluation.calibration import DEFAULT_MIN_USES, CalibrationReport, compute_calibration
+from acr.evaluation.calibration import (
+    DEFAULT_MIN_CALIBRATION_GAP,
+    DEFAULT_MIN_USES,
+    CalibrationReport,
+    compute_calibration,
+    find_miscalibrated_records,
+)
 from acr.evaluation.evaluators import ExactMatchEvaluator
 from acr.evaluation.panel import PanelResult
 from acr.evaluation.regression import RegressionReport, detect_regression
@@ -72,6 +78,7 @@ from acr.learning.proposals import (
     SelfImprovementDisabledError,
     approve_proposal,
     list_proposals,
+    propose_memory_recalibration,
     propose_routing_optimization,
     propose_skill_evolution,
     reject_proposal,
@@ -1525,6 +1532,61 @@ def improve_propose_routing_optimization(
         typer.echo(f"no proposal: {candidate_model} does not clearly outperform {current_model}")
         return
     _echo_proposal(result)
+
+
+@improve_app.command("propose-recalibration")
+def improve_propose_recalibration(
+    min_uses: int = typer.Option(
+        DEFAULT_MIN_USES, "--min-uses", help="Minimum real recorded uses to consider a record."
+    ),
+    min_gap: float = typer.Option(
+        DEFAULT_MIN_CALIBRATION_GAP,
+        "--min-gap",
+        help="Minimum |stored confidence - real empirical success rate| to propose a correction.",
+    ),
+) -> None:
+    """Scan every evidenced memory record for stored confidence that
+    significantly diverges from its own real empirical success rate, and
+    create one MEMORY_RECALIBRATION proposal per record found -- turning
+    `acr memory calibration`'s diagnosis into an actual, evidence-gated,
+    reviewable correction. Unlike routing optimization, this *can*
+    auto-apply (ACR_AUTO_APPLY_PROPOSALS) and *does* respect safe mode --
+    it mutates a real ACR-owned runtime value (memory confidence), the
+    same category of change `context.attribution` already makes
+    automatically with no human gate at all."""
+    settings = get_settings()
+
+    async def _propose() -> list[Proposal]:
+        async with session_scope(settings) as session:
+            candidates = await find_miscalibrated_records(
+                session, min_uses=min_uses, min_gap=min_gap
+            )
+            proposals = []
+            for c in candidates:
+                proposal = await propose_memory_recalibration(
+                    session,
+                    settings,
+                    TelemetryRecorder(),
+                    record_id=c.record_id,
+                    min_uses=min_uses,
+                    min_gap=min_gap,
+                )
+                if proposal is not None:
+                    proposals.append(proposal)
+            await session.commit()
+            return proposals
+
+    try:
+        proposals = asyncio.run(_propose())
+    except SelfImprovementDisabledError as exc:
+        typer.echo(f"disabled: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    if not proposals:
+        typer.echo(f"no records miscalibrated by >= {min_gap:.2f} with >= {min_uses} use(s)")
+        return
+    for p in proposals:
+        _echo_proposal(p)
 
 
 @improve_app.command("list")

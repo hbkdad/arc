@@ -5,14 +5,15 @@ from __future__ import annotations
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from acr.evaluation.calibration import compute_calibration
+from acr.evaluation.calibration import compute_calibration, find_miscalibrated_records
 from acr.memory import MemoryCandidate, MemoryScope, MemoryType
+from acr.memory.models import MemoryRecord
 from acr.memory.write_controller import remember
 
 
 async def _seed(
     session: AsyncSession, *, confidence: float, successful_uses: int, failed_uses: int
-) -> None:
+) -> MemoryRecord:
     _evaluation, record = await remember(
         session,
         MemoryCandidate(
@@ -29,6 +30,7 @@ async def _seed(
     record.successful_uses = successful_uses
     record.failed_uses = failed_uses
     await session.flush()
+    return record
 
 
 async def test_a_record_with_no_recorded_uses_is_excluded(db_session: AsyncSession) -> None:
@@ -101,3 +103,48 @@ async def test_returns_an_empty_report_with_no_records_at_all(db_session: AsyncS
     assert report.records_considered == 0
     assert report.records_excluded_no_evidence == 0
     assert report.brier_score is None
+
+
+async def test_find_miscalibrated_records_flags_a_significant_gap(
+    db_session: AsyncSession,
+) -> None:
+    record = await _seed(db_session, confidence=0.9, successful_uses=1, failed_uses=4)  # rate 0.2
+
+    found = await find_miscalibrated_records(db_session, min_gap=0.3)
+
+    assert len(found) == 1
+    m = found[0]
+    assert m.record_id == record.id
+    assert m.stored_confidence == 0.9
+    assert m.empirical_success_rate == 0.2
+    assert m.uses == 5
+    assert m.gap == pytest.approx(0.7)
+
+
+async def test_find_miscalibrated_records_excludes_a_well_calibrated_record(
+    db_session: AsyncSession,
+) -> None:
+    await _seed(db_session, confidence=0.9, successful_uses=9, failed_uses=1)  # rate 0.9
+
+    found = await find_miscalibrated_records(db_session, min_gap=0.3)
+
+    assert found == []
+
+
+async def test_find_miscalibrated_records_excludes_a_record_below_min_uses(
+    db_session: AsyncSession,
+) -> None:
+    await _seed(db_session, confidence=0.9, successful_uses=0, failed_uses=1)  # rate 0.0, 1 use
+
+    found = await find_miscalibrated_records(db_session, min_uses=3, min_gap=0.3)
+
+    assert found == []
+
+
+async def test_find_miscalibrated_records_sorts_worst_gap_first(db_session: AsyncSession) -> None:
+    mild = await _seed(db_session, confidence=0.9, successful_uses=6, failed_uses=4)  # gap 0.3
+    severe = await _seed(db_session, confidence=0.9, successful_uses=1, failed_uses=9)  # gap 0.8
+
+    found = await find_miscalibrated_records(db_session, min_gap=0.3)
+
+    assert [m.record_id for m in found] == [severe.id, mild.id]

@@ -1096,6 +1096,7 @@ uv run acr dashboard serve [--host --port --open-browser]   # dashboard + /visua
 uv run acr mcp serve [--transport stdio|sse|streamable-http] [--host --port]
 uv run acr improve propose-skill-evolution <baseline-id> <candidate-id>
 uv run acr improve propose-routing-optimization <task-class> <current-model> <candidate-model>
+uv run acr improve propose-recalibration [--min-uses N --min-gap N]   # miscalibrated memory confidence -> a real correction proposal
 uv run acr improve list [--status pending|approved|rejected|auto_applied]
 uv run acr improve approve <proposal-id>
 uv run acr improve reject <proposal-id>
@@ -2071,6 +2072,58 @@ UX gap):
   liveness check would have been. Verified directly: piped the raw hook
   command against an already-running instance and confirmed via
   `Get-Process` that no zombie process was left behind either way.
+
+### Competitive research + a third self-improvement proposal kind: MEMORY_RECALIBRATION (2026-08-01)
+
+A deliberate research pass (not just more building) against the current
+memory/agent-orchestration landscape — Letta/MemGPT, Mem0, Zep, Cognee for
+memory systems; Goose, OpenHands, LocalAGI for local-first orchestration;
+2026 papers on self-evolving skills (EvoSkills, SkillOpt, SkillAudit) for
+the self-improvement angle; current data on model-routing cost savings.
+Findings worth recording plainly, not just the part that turned into
+code:
+
+- ACR's memory design (typed records, confidence/utility scoring,
+  evidence-gated write control, calibration against real outcomes) is
+  already more principled than most of what's out there — none of the
+  surveyed systems validate stored confidence against real outcomes the
+  way `acr memory calibration` does.
+- The 2026 self-evolving-skills research describes almost exactly what
+  `acr.skills.evolution` + `acr.learning.proposals` already do: bounded
+  edit proposals, a held-out validation gate, promote/rollback. Real
+  validation that last night's design wasn't a guess.
+- The one genuine, evidenced gap: `acr memory calibration` was purely
+  *diagnostic* — it can tell you a confidence bin looks miscalibrated,
+  but nothing acted on it. None of the surveyed memory systems close that
+  loop either.
+
+`ProposalKind.MEMORY_RECALIBRATION` closes it. `acr.evaluation.calibration
+.find_miscalibrated_records()` is `compute_calibration()`'s same read-only
+analysis at per-record granularity instead of a binned average (a bin's
+mean can look fine while records inside it are off in opposite
+directions and cancel out) — for each record whose *own* stored
+`confidence` diverges from its *own* real `successful_uses`/
+`failed_uses` outcome by more than `DEFAULT_MIN_CALIBRATION_GAP` (0.3),
+`acr.learning.proposals.propose_memory_recalibration()` proposes
+resetting `confidence` to the real empirical rate.
+
+This is the first proposal kind since `SKILL_EVOLUTION_PROMOTION` that
+can actually auto-apply (not advisory-only like `ROUTING_OPTIMIZATION`,
+which has no safe mechanism to change routing from inside the process).
+`MemoryRecord.confidence` is exactly the kind of ACR-owned runtime value
+the scope boundary already permits mutating — `context.attribution`
+already changes memory-confidence-adjacent fields automatically with no
+human gate at all; this just makes a specific, evidence-gated correction
+explicit and reviewable instead of silent. Two safety properties, both
+locked in with tests: `require_not_safe_mode()` now gates
+`memory.recalibrate:<subject>` (the safe-mode module's own docstring
+already listed "autonomous optimization" as intended-but-not-yet-wired
+coverage — this is the first real operation to close that), and `_apply()`
+re-checks the record's confidence against what the proposal was
+evaluated against before mutating, refusing to clobber a value that
+already drifted (the same pattern `apply_gc_plan()` uses). `acr improve
+propose-recalibration` scans and proposes for every record found in one
+pass.
 
 ## What's left
 

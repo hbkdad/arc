@@ -13,19 +13,21 @@ Scope boundary (also explicit user intent: self-improve "for the design
 and intent it was given," not unboundedly): a proposal can only ever
 invoke a mechanism this codebase already exposes as a reviewable, gated
 operation (`acr.skills.evolution.promote_evolution`, itself safe-mode-
-aware) — or, when no safe mechanism to auto-apply exists at all
-(`ROUTING_OPTIMIZATION`: see `acr.learning.routing_optimization`), stay
-strictly advisory, never silently mutating environment/config as a side
-effect of approval. There is no proposal kind — and never will be one
-added here — that edits ACR's own source code, dependencies, or
-permission grants; those stay entirely outside what "self-improvement"
-means in this system.
+aware; `MemoryRecord.confidence`, a runtime value ACR already mutates
+automatically via `acr.context.attribution` with no human gate at all,
+see `MEMORY_RECALIBRATION` below) — or, when no safe mechanism to
+auto-apply exists at all (`ROUTING_OPTIMIZATION`: see
+`acr.learning.routing_optimization`), stay strictly advisory, never
+silently mutating environment/config as a side effect of approval. There
+is no proposal kind — and never will be one added here — that edits
+ACR's own source code, dependencies, or permission grants; those stay
+entirely outside what "self-improvement" means in this system.
 """
 
 from __future__ import annotations
 
 import uuid
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
@@ -37,8 +39,11 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from acr.config import Settings
 from acr.db.base import Base
+from acr.evaluation.calibration import DEFAULT_MIN_CALIBRATION_GAP
 from acr.learning.routing_optimization import ModelOutcome, RoutingComparison, compare_models
+from acr.memory.models import MemoryRecord
 from acr.security.audit import record_audit_event
+from acr.security.safe_mode import require_not_safe_mode
 from acr.skills.evolution import EvolutionComparison, compare_versions, promote_evolution
 from acr.skills.registry import SkillNotFoundError, get
 from acr.telemetry.recorder import TelemetryRecorder
@@ -55,6 +60,11 @@ def _utcnow() -> datetime:
 class ProposalKind(StrEnum):
     SKILL_EVOLUTION_PROMOTION = "skill_evolution_promotion"
     ROUTING_OPTIMIZATION = "routing_optimization"
+    MEMORY_RECALIBRATION = "memory_recalibration"
+
+
+class MemoryRecordNotFoundError(LookupError):
+    """Raised by `propose_memory_recalibration()` for an unknown record id."""
 
 
 class ProposalStatus(StrEnum):
@@ -212,6 +222,106 @@ async def propose_routing_optimization(
     return proposal
 
 
+@dataclass(frozen=True, slots=True)
+class RecalibrationComparison:
+    record_id: str
+    subject: str
+    old_confidence: float
+    new_confidence: float
+    uses: int
+    reason: str
+
+
+async def propose_memory_recalibration(
+    session: AsyncSession,
+    settings: Settings,
+    telemetry: TelemetryRecorder,
+    *,
+    record_id: str,
+    min_uses: int = 1,
+    min_gap: float = DEFAULT_MIN_CALIBRATION_GAP,
+) -> Proposal | None:
+    """Compare `record_id`'s stored `confidence` against its own real
+    `successful_uses`/`failed_uses` outcome (`acr.evaluation.calibration`)
+    and, only if the gap is significant, propose resetting `confidence` to
+    the real empirical rate.
+
+    Closes a loop `acr memory calibration` left purely diagnostic: that
+    command can tell you a record's confidence looks miscalibrated, but
+    nothing acted on it. Every other proposal kind here already mutates
+    real ACR-owned runtime state on approval (skill status;
+    `context.attribution` already mutates memory confidence-adjacent
+    fields automatically, with no human gate at all) -- this is the same
+    category of change, just made explicit, evidence-gated, and reviewable
+    rather than silent. Returns `None` (not a rejected proposal) when the
+    record doesn't have enough evidence or isn't significantly
+    miscalibrated: absence of evidence isn't itself evidence to propose
+    anything (master principle #22).
+    """
+    if not settings.self_improvement_enabled:
+        raise SelfImprovementDisabledError(
+            "self-improvement is disabled (ACR_SELF_IMPROVEMENT_ENABLED=0)"
+        )
+
+    record = await session.get(MemoryRecord, record_id)
+    if record is None:
+        raise MemoryRecordNotFoundError(record_id)
+
+    uses = record.successful_uses + record.failed_uses
+    if uses < min_uses:
+        return None
+    empirical = record.successful_uses / uses
+    gap = record.confidence - empirical
+    if abs(gap) < min_gap:
+        return None
+
+    comparison = RecalibrationComparison(
+        record_id=record.id,
+        subject=record.subject,
+        old_confidence=record.confidence,
+        new_confidence=empirical,
+        uses=uses,
+        reason=(
+            f"stored confidence {record.confidence:.2f} vs real empirical "
+            f"success rate {empirical:.2f} over {uses} recorded use(s) "
+            f"(gap {gap:+.2f})"
+        ),
+    )
+
+    auto_apply = settings.auto_apply_proposals
+    proposal = Proposal(
+        kind=ProposalKind.MEMORY_RECALIBRATION,
+        subject=record.subject,
+        payload=asdict(comparison),
+        reason=comparison.reason,
+        status=ProposalStatus.PENDING,
+    )
+    session.add(proposal)
+    await session.flush()
+
+    await record_audit_event(
+        session,
+        telemetry,
+        action=f"proposal.create:{proposal.id}",
+        outcome="pending",
+        detail={"kind": proposal.kind.value, "subject": proposal.subject},
+    )
+
+    if auto_apply:
+        await _apply(session, proposal, safe_mode=settings.safe_mode)
+        proposal.status = ProposalStatus.AUTO_APPLIED
+        proposal.decided_at = _utcnow()
+        await record_audit_event(
+            session,
+            telemetry,
+            action=f"proposal.auto_apply:{proposal.id}",
+            outcome="applied",
+            detail={"kind": proposal.kind.value, "subject": proposal.subject},
+        )
+
+    return proposal
+
+
 async def _apply(session: AsyncSession, proposal: Proposal, *, safe_mode: bool) -> None:
     if proposal.kind is ProposalKind.SKILL_EVOLUTION_PROMOTION:
         comparison = EvolutionComparison(**proposal.payload)
@@ -223,6 +333,20 @@ async def _apply(session: AsyncSession, proposal: Proposal, *, safe_mode: bool) 
         # Advisory only -- see module docstring. Approving means "reviewed
         # by a human," not "changed": there is no safe, gated mechanism to
         # flip Settings.default_min_quality_tier from inside this process.
+        return
+    if proposal.kind is ProposalKind.MEMORY_RECALIBRATION:
+        require_not_safe_mode(safe_mode, f"memory.recalibrate:{proposal.subject}")
+        comparison = RecalibrationComparison(**proposal.payload)
+        record = await session.get(MemoryRecord, comparison.record_id)
+        if record is None:
+            return  # deleted/archived since the proposal was created -- nothing to apply
+        if record.confidence != comparison.old_confidence:
+            # Drifted (or was already corrected) since this proposal was
+            # evaluated -- re-check-before-mutate, same as
+            # acr.learning.consolidation.apply_gc_plan()'s own pattern for
+            # exactly this staleness risk.
+            return
+        record.confidence = comparison.new_confidence
         return
     raise NotImplementedError(f"no applier registered for proposal kind {proposal.kind!r}")
 

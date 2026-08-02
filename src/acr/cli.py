@@ -38,6 +38,14 @@ from acr.backup import (
 from acr.benchmarks import memory_recall
 from acr.benchmarks.models import BenchmarkRun
 from acr.benchmarks.runner import run_suite
+from acr.chat.engine import (
+    ChatSessionNotFoundError,
+    ChatTurn,
+    get_transcript,
+    list_sessions,
+    send_message,
+)
+from acr.chat.models import ChatMessage, ChatRole, ChatSession
 from acr.config import get_settings
 from acr.context.compiler import compile_context
 from acr.context.models import ContextBundle
@@ -159,6 +167,7 @@ memory_app = typer.Typer(
     name="memory", help="Memory lifecycle: consolidation and garbage collection."
 )
 backup_app = typer.Typer(name="backup", help="Backup and restore the local data directory.")
+chat_app = typer.Typer(name="chat", help="Interactive multi-turn chat sessions.")
 app.add_typer(context_app)
 app.add_typer(skills_app)
 app.add_typer(benchmark_app)
@@ -174,6 +183,7 @@ app.add_typer(improve_app)
 app.add_typer(db_app)
 app.add_typer(memory_app)
 app.add_typer(backup_app)
+app.add_typer(chat_app)
 
 # Every registered benchmark suite: name -> (seed, build_cases). Only one
 # exists today (master principle #23: no feature expansion without
@@ -345,6 +355,158 @@ def run(
 
     if task.status is TaskStatus.FAILED:
         raise typer.Exit(code=1)
+
+
+@chat_app.command("send")
+def chat_send(
+    message: str = typer.Argument(..., help="Message to send."),
+    session_id: str | None = typer.Option(
+        None, "--session", help="Continue an existing chat session. Omit to start a new one."
+    ),
+    min_quality_tier: int | None = typer.Option(
+        None,
+        "--min-quality-tier",
+        help="Same routing ladder as `acr run`. Defaults to "
+        "Settings.default_min_quality_tier when omitted.",
+    ),
+) -> None:
+    """Send one message and print the assistant's reply -- scriptable,
+    non-interactive. Prints the session id so a script can continue the
+    same conversation across separate `acr chat send` calls."""
+    settings = get_settings()
+    router = build_default_router(settings)
+    resolved_tier = (
+        min_quality_tier if min_quality_tier is not None else settings.default_min_quality_tier
+    )
+
+    async def _send() -> ChatTurn:
+        async with session_scope(settings) as session:
+            return await send_message(
+                session,
+                router,
+                TelemetryRecorder(),
+                message,
+                chat_session_id=session_id,
+                min_quality_tier=resolved_tier,
+            )
+
+    try:
+        turn = asyncio.run(_send())
+    except NoProviderAvailableError as exc:
+        typer.echo(f"no provider available: {exc}")
+        raise typer.Exit(code=1) from exc
+    except ChatSessionNotFoundError as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(turn.reply)
+    typer.echo(f"[session {turn.session_id} | {turn.provider}/{turn.model}]")
+
+
+@chat_app.command("repl")
+def chat_repl(
+    session_id: str | None = typer.Option(
+        None, "--session", help="Resume an existing chat session. Omit to start a new one."
+    ),
+    min_quality_tier: int | None = typer.Option(
+        None, "--min-quality-tier", help="Same routing ladder as `acr run`."
+    ),
+) -> None:
+    """Interactive multi-turn chat loop. Type a message and press enter;
+    /exit or /quit (or EOF/Ctrl-D) ends it. Provider selection is
+    re-resolved every turn, so a long-running session picks up a
+    newly-configured key or a provider coming back online without
+    needing to restart."""
+    settings = get_settings()
+    router = build_default_router(settings)
+    resolved_tier = (
+        min_quality_tier if min_quality_tier is not None else settings.default_min_quality_tier
+    )
+    telemetry = TelemetryRecorder()
+    current_session_id = session_id
+
+    typer.echo("acr chat -- /exit or /quit to end, Ctrl-D also works.")
+    if current_session_id:
+        typer.echo(f"resuming session {current_session_id}")
+
+    async def _send(text: str) -> ChatTurn:
+        async with session_scope(settings) as session:
+            return await send_message(
+                session,
+                router,
+                telemetry,
+                text,
+                chat_session_id=current_session_id,
+                min_quality_tier=resolved_tier,
+            )
+
+    while True:
+        try:
+            text = input("you> ")
+        except EOFError:
+            typer.echo("\nbye")
+            break
+        if text.strip() in {"/exit", "/quit"}:
+            typer.echo("bye")
+            break
+        if not text.strip():
+            continue
+        try:
+            turn = asyncio.run(_send(text))
+        except NoProviderAvailableError as exc:
+            typer.echo(f"no provider available: {exc}")
+            continue
+        except ChatSessionNotFoundError as exc:
+            typer.echo(str(exc))
+            break
+        except Exception as exc:
+            typer.echo(f"error: {exc}")
+            continue
+        current_session_id = turn.session_id
+        typer.echo(f"assistant> {turn.reply}")
+
+
+@chat_app.command("list")
+def chat_list(
+    limit: int = typer.Option(20, "--limit", help="Maximum number of sessions to show."),
+) -> None:
+    """Chat sessions, most recently active first."""
+    settings = get_settings()
+
+    async def _list() -> list[ChatSession]:
+        async with session_scope(settings) as session:
+            return await list_sessions(session, limit=limit)
+
+    sessions = asyncio.run(_list())
+    if not sessions:
+        typer.echo("no chat sessions yet")
+        return
+    for chat_session in sessions:
+        typer.echo(
+            f"{chat_session.id}\t{chat_session.updated_at.isoformat()}\t{chat_session.title}"
+        )
+
+
+@chat_app.command("show")
+def chat_show(
+    session_id: str = typer.Argument(..., help="Chat session id (from `acr chat list`)."),
+) -> None:
+    """Print a chat session's full transcript."""
+    settings = get_settings()
+
+    async def _show() -> list[ChatMessage]:
+        async with session_scope(settings) as session:
+            return await get_transcript(session, session_id)
+
+    try:
+        messages = asyncio.run(_show())
+    except ChatSessionNotFoundError as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(code=1) from exc
+
+    for message in messages:
+        speaker = "you" if message.role == ChatRole.USER else "assistant"
+        typer.echo(f"{speaker}> {message.content}")
 
 
 @app.command()

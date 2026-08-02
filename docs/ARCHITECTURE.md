@@ -1052,6 +1052,10 @@ uv run acr doctor              # Python version, data dir, DB, mock + Ollama pro
 uv run acr setup                             # interactive first-run wizard (.env + provider keys)
 uv run acr version
 uv run acr run "objective" [--min-quality-tier N]  # 0=mock (default); raise for Ollama/cloud
+uv run acr chat send "message" [--session ID --min-quality-tier N]  # one turn, scriptable
+uv run acr chat repl [--session ID --min-quality-tier N]   # interactive multi-turn loop
+uv run acr chat list [--limit N]             # sessions, most recently active first
+uv run acr chat show <session-id>            # full transcript
 uv run acr context compile "objective" --budget 2000  # compile + print a ContextBundle
 uv run acr skills register <path>        # parse SKILL.yaml, add/update the registry
 uv run acr skills list [--status active]
@@ -2530,6 +2534,74 @@ Full command reference for this release: the "ACR CLI Guide" artifact
 built this session (getting-started, core concepts, every command by
 area, and a support section) — not checked into the repo, but every
 command in it was verified against `src/acr/cli.py` as of this commit.
+
+## `acr chat`: interactive multi-turn sessions (2026-08-01)
+
+Every prior entry point (`acr run`, MCP's `run_task`) is one-shot: an
+objective in, a completion out, no memory of the call across separate
+invocations. Asked directly for "a way to chat with models through ACR
+itself" — this closes that gap without touching anything that existed
+before it.
+
+**New module, `acr.chat`, deliberately separate from the task engine.**
+`ChatSession`/`ChatMessage` (new tables, `src/acr/chat/models.py`) are not
+`Task`/`TaskRun`/`Step` — a chat turn has no planning/verification
+lifecycle, so forcing it through `core.tasks`' state machine would mean
+bending a model built for a different shape of work. `acr.chat.engine.
+send_message()` resolves a provider through the *same* `ModelRouter.
+select()` `acr run`'s CLI wiring uses (cheapest available meeting
+`--min-quality-tier`, re-resolved every turn — a long REPL session picks
+up a newly-configured key or a provider coming back online with no
+restart), then persists both turns as `ChatMessage` rows and emits the
+*same* `model.call.completed`/`model.call.failed` telemetry events
+`run_task()` does. Consequence: chat usage shows up in `acr models usage`
+and the dashboard's routing/cost views automatically — no changes needed
+to `acr.telemetry.usage.usage_by_provider()`, since it already aggregates
+by event type and payload shape, not by which code path emitted the
+event.
+
+**Conversation history is a plain formatted transcript, not memory
+retrieval.** `_format_prompt()` replays the session's last N messages
+(`DEFAULT_HISTORY_WINDOW = 20`) as `User: .../Assistant: ...` turns ahead
+of the new message — deliberately *not* routed through `acr.context`'s
+hybrid-retrieval compiler, which answers "what's relevant from everything
+ACR has ever seen," a different question from "what did we just say in
+this conversation." The provider interface (`CompletionRequest.prompt:
+str`) needed no changes — every provider adapter (mock, Ollama, Anthropic,
+OpenAI) already accepts a flat prompt string, so history assembly happens
+entirely in `acr.chat.engine`, not in any provider.
+
+**Secrets: redacted at rest, not in flight.** A message is sent to the
+provider raw (the user explicitly chose to send it — redacting it first
+would silently mangle a legitimate "why isn't my key sk-... working"
+question), but `redact_secrets()` scrubs it before the `ChatMessage` row
+is written, mirroring `run_task()`'s existing Step-payload redaction.
+Because history is replayed from the *stored* (already-redacted) rows,
+a secret is used once for its own turn's live call and never appears
+again — including back to the model itself on the next turn.
+
+**Ordering integrity.** `ChatSession.updated_at` has an `onupdate`
+trigger, but inserting a child `ChatMessage` row doesn't itself emit an
+`UPDATE` against `chat_sessions` — caught before it shipped: `list_sessions()`'s
+"most recently active first" ordering would have silently degraded to
+"most recently *created*" first, since the trigger would never fire on
+its own. Fixed by explicitly bumping `updated_at` inside `send_message()`.
+
+CLI: `acr chat send "message" [--session ID]` (scriptable, prints the
+reply and session id), `acr chat repl` (interactive loop; `/exit`/`/quit`/
+EOF ends it; a single failed turn is caught and reported, not fatal —
+verified with a real Ollama round-trip including a follow-up turn that
+correctly echoed context from the first), `acr chat list`, `acr chat show
+<id>`. 20 new tests (`tests/test_chat_engine.py`, plus CLI tests in
+`tests/test_cli.py`), 100% coverage on `acr.chat`.
+
+Deliberately not built in this slice: a task-class-aware model-affinity
+router (e.g. preferring Claude for code, GPT for something else, instead
+of always picking cheapest at a given tier) — the smaller, self-contained
+piece was built first since using `acr chat` for real is what would
+generate the per-provider outcome data to make that evidence-based
+instead of guessed, the same pattern `ROUTING_OPTIMIZATION` proposals
+already use.
 
 ## What's left
 

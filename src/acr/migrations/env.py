@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 # Base.metadata so `alembic revision --autogenerate` can see them.
 from acr.agents import topology as _agent_topology_models  # noqa: F401
 from acr.benchmarks import models as _benchmark_models  # noqa: F401
+from acr.chat import models as _chat_models  # noqa: F401
 from acr.config import get_settings
 from acr.core.tasks import models as _task_models  # noqa: F401
 from acr.db.base import Base

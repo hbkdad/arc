@@ -1354,3 +1354,115 @@ def test_memory_record_commit_reports_a_clean_error_for_a_bad_revision(
     assert "git error" in result.stdout
 
     get_settings.cache_clear()
+
+
+def test_chat_send_starts_a_new_session_and_prints_the_reply(
+    migrated_settings: Settings,
+) -> None:
+    result = runner.invoke(app, ["chat", "send", "hello there", "--min-quality-tier", "0"])
+
+    assert result.exit_code == 0
+    assert "[mock:" in result.stdout
+    assert "[session " in result.stdout
+
+
+def test_chat_send_resumes_an_existing_session(migrated_settings: Settings) -> None:
+    first = runner.invoke(app, ["chat", "send", "first", "--min-quality-tier", "0"])
+    session_id = re.search(r"\[session (\S+) \|", first.stdout).group(1)  # type: ignore[union-attr]
+
+    result = runner.invoke(
+        app, ["chat", "send", "second", "--session", session_id, "--min-quality-tier", "0"]
+    )
+
+    assert result.exit_code == 0
+    assert f"[session {session_id} " in result.stdout
+
+
+def test_chat_send_reports_unknown_session_cleanly(migrated_settings: Settings) -> None:
+    result = runner.invoke(
+        app, ["chat", "send", "hi", "--session", "does-not-exist", "--min-quality-tier", "0"]
+    )
+
+    assert result.exit_code == 1
+    assert "no chat session" in result.stdout
+
+
+def test_chat_send_reports_no_provider_available_cleanly(migrated_settings: Settings) -> None:
+    result = runner.invoke(app, ["chat", "send", "hi", "--min-quality-tier", "5"])
+
+    assert result.exit_code == 1
+    assert "no provider available" in result.stdout
+
+
+def test_chat_list_shows_no_sessions_message_when_empty(migrated_settings: Settings) -> None:
+    result = runner.invoke(app, ["chat", "list"])
+
+    assert result.exit_code == 0
+    assert "no chat sessions yet" in result.stdout
+
+
+def test_chat_list_shows_a_started_session(migrated_settings: Settings) -> None:
+    runner.invoke(app, ["chat", "send", "hello there", "--min-quality-tier", "0"])
+
+    result = runner.invoke(app, ["chat", "list"])
+
+    assert result.exit_code == 0
+    assert "hello there" in result.stdout
+
+
+def test_chat_show_prints_the_full_transcript(migrated_settings: Settings) -> None:
+    send_result = runner.invoke(app, ["chat", "send", "hello there", "--min-quality-tier", "0"])
+    session_id = re.search(r"\[session (\S+) \|", send_result.stdout).group(1)  # type: ignore[union-attr]
+
+    result = runner.invoke(app, ["chat", "show", session_id])
+
+    assert result.exit_code == 0
+    assert "you> hello there" in result.stdout
+    assert "assistant> [mock:" in result.stdout
+
+
+def test_chat_show_reports_unknown_session_cleanly(migrated_settings: Settings) -> None:
+    result = runner.invoke(app, ["chat", "show", "does-not-exist"])
+
+    assert result.exit_code == 1
+    assert "no chat session" in result.stdout
+
+
+def test_chat_repl_completes_a_multi_turn_conversation_and_exits_cleanly(
+    migrated_settings: Settings,
+) -> None:
+    result = runner.invoke(
+        app,
+        ["chat", "repl", "--min-quality-tier", "0"],
+        input="hello there\nhow are you\n/exit\n",
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout.count("assistant> [mock:") == 2
+    assert "bye" in result.stdout
+
+
+def test_chat_repl_ends_cleanly_on_eof_without_an_explicit_exit(
+    migrated_settings: Settings,
+) -> None:
+    result = runner.invoke(app, ["chat", "repl", "--min-quality-tier", "0"], input="hello there\n")
+
+    assert result.exit_code == 0
+    assert "assistant> [mock:" in result.stdout
+    assert "bye" in result.stdout
+
+
+def test_chat_repl_survives_a_failed_turn_and_keeps_going(
+    migrated_settings: Settings,
+) -> None:
+    # --min-quality-tier 5 has no qualifying provider -- the REPL must
+    # report the error and keep prompting, not crash the whole session.
+    result = runner.invoke(
+        app,
+        ["chat", "repl", "--min-quality-tier", "5"],
+        input="hello there\n/exit\n",
+    )
+
+    assert result.exit_code == 0
+    assert "no provider available" in result.stdout
+    assert "bye" in result.stdout

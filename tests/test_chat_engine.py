@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from acr.chat.engine import (
+    DEFAULT_MAX_OUTPUT_TOKENS,
     ChatSessionNotFoundError,
     send_message,
 )
@@ -25,6 +26,24 @@ class _AlwaysFailsProvider(ModelProvider):
 
     async def complete(self, request: CompletionRequest) -> CompletionResult:
         raise RuntimeError("simulated provider failure")
+
+
+class _CapturingProvider(ModelProvider):
+    """Records the exact `CompletionRequest` it was called with."""
+
+    name = "capturing"
+
+    def __init__(self) -> None:
+        self.last_request: CompletionRequest | None = None
+
+    async def is_available(self) -> bool:
+        return True
+
+    async def complete(self, request: CompletionRequest) -> CompletionResult:
+        self.last_request = request
+        return CompletionResult(
+            text="ok", provider=self.name, model="capture-1", input_tokens=1, output_tokens=1
+        )
 
 
 def _mock_router() -> ModelRouter:
@@ -191,3 +210,22 @@ async def test_send_message_redacts_secrets_in_stored_content(db_session: AsyncS
     assert "sk-ant-api03-" not in messages[0].content
     assert "[REDACTED]" in messages[0].content
     assert "sk-ant-api03-" not in messages[1].content
+
+
+async def test_send_message_requests_a_generous_output_token_ceiling_by_default(
+    db_session: AsyncSession,
+) -> None:
+    # A real bug: CompletionRequest's own default (512) reliably cut off a
+    # substantive reply (e.g. "write me a full HTML page") mid-generation.
+    # send_message() must ask for real headroom instead of inheriting that
+    # default silently.
+    provider = _CapturingProvider()
+    router = ModelRouter(
+        [ModelProfile(provider=provider, name="capturing", cost_per_1k_tokens=0.0, quality_tier=0)]
+    )
+
+    await send_message(db_session, router, TelemetryRecorder(), "write me something long")
+
+    assert provider.last_request is not None
+    assert provider.last_request.max_output_tokens == DEFAULT_MAX_OUTPUT_TOKENS
+    assert provider.last_request.max_output_tokens > 512

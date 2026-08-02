@@ -37,6 +37,7 @@ from acr.telemetry.recorder import TelemetryRecorder
 
 __all__ = [
     "DEFAULT_HISTORY_WINDOW",
+    "DEFAULT_MAX_OUTPUT_TOKENS",
     "ChatSessionNotFoundError",
     "ChatTurn",
     "get_transcript",
@@ -45,6 +46,12 @@ __all__ = [
 ]
 
 DEFAULT_HISTORY_WINDOW = 20
+# `CompletionRequest`'s own default (512) is tuned for the task engine's
+# typically terse objectives -- real chat use (e.g. "write me a full HTML
+# page") reliably got cut off mid-generation at that cap. This is a
+# ceiling, not a target: raising it doesn't slow down a short reply, since
+# generation still stops at its own natural end either way.
+DEFAULT_MAX_OUTPUT_TOKENS = 4096
 _TITLE_MAX_LEN = 60
 
 
@@ -94,6 +101,7 @@ async def send_message(
     chat_session_id: str | None = None,
     min_quality_tier: int = 0,
     history_window: int = DEFAULT_HISTORY_WINDOW,
+    max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
 ) -> ChatTurn:
     """Send one message in `chat_session_id`'s conversation (or start a new
     one if omitted), and return the assistant's reply.
@@ -159,7 +167,9 @@ async def send_message(
     await session.commit()
 
     try:
-        result = await profile.provider.complete(CompletionRequest(prompt=prompt))
+        result = await profile.provider.complete(
+            CompletionRequest(prompt=prompt, max_output_tokens=max_output_tokens)
+        )
     except Exception as exc:
         await telemetry.emit(
             session, "model.call.failed", payload={"provider": profile.name, "error": str(exc)}

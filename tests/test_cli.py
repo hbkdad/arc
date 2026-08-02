@@ -1394,6 +1394,51 @@ def test_chat_send_reports_no_provider_available_cleanly(migrated_settings: Sett
     assert "no provider available" in result.stdout
 
 
+def test_chat_send_reports_a_provider_failure_cleanly_instead_of_a_traceback(
+    migrated_settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A real bug: a provider failure other than "no provider available"
+    # (a real Ollama ReadTimeout, observed live) previously propagated as
+    # an unhandled exception -- a raw Python traceback dumped to the
+    # terminal instead of a clean one-line message.
+    from acr.providers.base import CompletionRequest, CompletionResult
+    from acr.providers.base import ModelProvider as _ModelProvider
+    from acr.routing.models import ModelProfile, ModelRouter
+
+    class _AlwaysFailsProvider(_ModelProvider):
+        name = "always-fails"
+
+        async def is_available(self) -> bool:
+            return True
+
+        async def complete(self, request: CompletionRequest) -> CompletionResult:
+            raise RuntimeError("simulated provider failure")
+
+    def _failing_router(_settings: Settings) -> ModelRouter:
+        return ModelRouter(
+            [
+                ModelProfile(
+                    provider=_AlwaysFailsProvider(),
+                    name="always-fails",
+                    cost_per_1k_tokens=0.0,
+                    quality_tier=0,
+                )
+            ]
+        )
+
+    monkeypatch.setattr("acr.cli.build_default_router", _failing_router)
+
+    result = runner.invoke(app, ["chat", "send", "hi"])
+
+    # A clean `typer.Exit(1)` (SystemExit) either way -- the real
+    # differentiator is the message: only present if the new except-clause
+    # actually caught the failure and printed it, instead of it propagating
+    # as a raw unhandled exception with nothing written to stdout.
+    assert result.exit_code == 1
+    assert "chat send failed" in result.stdout
+    assert "simulated provider failure" in result.stdout
+
+
 def test_chat_list_shows_no_sessions_message_when_empty(migrated_settings: Settings) -> None:
     result = runner.invoke(app, ["chat", "list"])
 

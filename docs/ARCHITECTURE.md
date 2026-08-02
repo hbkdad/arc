@@ -2708,6 +2708,51 @@ echoed that artifact back — a small model pattern-matching a confusing
 context, not a new bug. Disclosed directly rather than silently left for
 the user to notice; starting a fresh session avoids replaying it.
 
+## Hardware-constrained real usage: model choice, output truncation, clean CLI failures (2026-08-02)
+
+Follow-up from a real usage session on the user's actual hardware (a
+small local model, explicitly cost-constrained -- "trying to make money
+to get better computers"), asking `acr chat` to generate a full HTML
+tool. Three real, separate findings, not one:
+
+**1. Ollama model selection was accidental, not chosen.** `ACR_OLLAMA_MODEL`
+was unset, so `OllamaProvider._resolve_model()`'s auto-detect fallback
+(`models[0]` from Ollama's own listing) picked whichever model happened
+to sort first -- `qwen2.5-coder:1.5b`, the smallest of six models already
+pulled locally, including a `qwen2.5-coder:7b` that was never being used.
+Not a code bug (the auto-detect behavior is intentional and documented),
+but a real gap in visibility -- nothing surfaced that a meaningfully
+better free, local, zero-setup option was already sitting unused. Set
+`ACR_OLLAMA_MODEL=qwen2.5-coder:7b` explicitly in `.env`. Also found
+`ACR_DEFAULT_MIN_QUALITY_TIER=2` was already set (routing through a
+configured Anthropic key first, the same key with a known low-balance
+error from earlier this session) -- lowered to `1` at the user's request
+so free local Ollama is the real default and tier 2 is opt-in per call.
+
+**2. A real truncation bug in `acr.chat`.** `CompletionRequest`'s own
+default (`max_output_tokens=512`) is tuned for the task engine's
+typically terse objectives; `acr.chat.engine.send_message()` never
+overrode it, so a substantive reply (a full HTML page) reliably got cut
+off mid-generation. Fixed: a new `DEFAULT_MAX_OUTPUT_TOKENS = 4096`,
+threaded through as a real parameter, not just a larger hardcoded
+literal at the call site -- a ceiling, not a target, so it costs nothing
+for a short reply. New regression test asserts the real value reaches
+the provider request, via a capturing fake provider.
+
+**3. Fixing truncation surfaced the underlying reality: this is a real
+hardware ceiling, not a bug to code around.** With headroom to actually
+finish, the same HTML request instead hit Ollama's hard 300s
+`httpx.ReadTimeout` -- confirmed via a real reproduction, not
+speculation. No client-side fix changes that: `qwen2.5-coder:7b` on this
+hardware cannot finish a multi-hundred-line generation within the
+configured limit. What WAS a real, fixable bug: the CLI's `chat send`
+(unlike `chat repl`, which already catches this) had no handler for a
+provider failure beyond `NoProviderAvailableError`/
+`ChatSessionNotFoundError`, so a timeout propagated as a raw Python
+traceback dumped to the terminal instead of the same clean one-line
+message the dashboard route already gives (see the section above).
+Fixed to match, with a real regression test.
+
 ## What's left
 
 Every phase in the master spec's 15-phase list (§65-66) now has a

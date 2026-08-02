@@ -398,6 +398,14 @@ def chat_send(
     except ChatSessionNotFoundError as exc:
         typer.echo(str(exc))
         raise typer.Exit(code=1) from exc
+    except Exception as exc:
+        # A real provider failure (a timeout on a slow local model, a
+        # network error) previously spilled a raw Python traceback here --
+        # `chat_repl`'s loop already gets a clean message for the same
+        # failure shape; `chat send` (used non-interactively, often from a
+        # script) deserves the same, not a stack trace.
+        typer.echo(f"chat send failed: {exc}")
+        raise typer.Exit(code=1) from exc
 
     typer.echo(turn.reply)
     typer.echo(f"[session {turn.session_id} | {turn.provider}/{turn.model}]")

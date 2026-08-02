@@ -1,0 +1,21 @@
+id: local-business-web-design
+name: Local Business / Trades Web Design Methodology
+version: "1.0.0"
+description: Build or review a marketing/lead-gen website for a local trade, contractor, or small independent brand -- token-driven CSS, real-brand fidelity, accessibility, and conversion, distilled from real shipped client sites.
+task_classes:
+  - web-design-generation
+  - web-design-review
+inputs:
+  target: string
+outputs:
+  result: string
+dependencies: []
+permissions: []
+tools: []
+models: []
+token_estimate: 540
+applicability: Use when a task asks to build, edit, or review a marketing/lead-gen website for a local trade, contractor, or small independent brand -- e.g. a drilling/contracting company site, an industrial-B2B campaign page, or a rider/lifestyle merch storefront. Not for ACR's own dashboard (separate token system) or generic SaaS/app product UI.
+contraindications: Do not use for ACR's own dashboard theming (see dashboard-design-elaborate/dashboard-ui-audit instead) or for reviewing a non-commercial/internal tool's UI.
+verification: The output must name a concrete CSS custom-property token set (not vague color words), a specific display/body font pairing, and reference the project's own design-system/MASTER.md as the source of truth for that client's real brand facts rather than inventing placeholder brand facts.
+origin: manual
+author: acr-team

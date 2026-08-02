@@ -147,7 +147,16 @@ async def send_message(
     # recently active first" ordering reflects real activity, not just
     # creation time.
     chat_session.updated_at = datetime.now(UTC)
-    await session.flush()
+    # Commit here, before the (potentially slow, seconds-to-minutes)
+    # provider call -- not just flush. A real concurrency test (two slow
+    # local-model calls in flight at once) surfaced `database is locked`:
+    # SQLite/WAL allows one writer at a time, and a flushed-but-uncommitted
+    # transaction held open across the network call blocks any other
+    # writer for the DB's `busy_timeout` (30s) before failing outright, far
+    # short of a slow model's real completion time. Committing now releases
+    # the write lock for the duration of the call; only the brief inserts
+    # before and after it ever hold it.
+    await session.commit()
 
     try:
         result = await profile.provider.complete(CompletionRequest(prompt=prompt))

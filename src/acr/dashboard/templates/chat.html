@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Chat</h1>
+<p class="lede">Talk to a model through ACR directly. Provider selection uses the same routing ladder as <code>acr run</code> and <code>acr chat</code> -- cheapest available profile meeting the requested quality tier, re-resolved every message.</p>
+
+{% if error %}
+<div class="chat-error">{{ error }} -- <a href="/chat">back to chat</a></div>
+{% endif %}
+
+<div class="chat-layout">
+  <div class="chat-sidebar">
+    <a href="/chat" class="chat-new">+ New chat</a>
+    {% for s in sessions %}
+    <a href="/chat?session_id={{ s.id }}" class="chat-session-link {{ 'active' if s.id == selected_id }}">
+      {{ s.title }}
+      <span class="chat-session-time">{{ s.updated_at.strftime("%Y-%m-%d %H:%M") }}</span>
+    </a>
+    {% else %}
+    <p class="empty">No chat sessions yet.</p>
+    {% endfor %}
+  </div>
+
+  <div class="chat-main">
+    <div class="chat-thread" id="chat-thread">
+      {% for m in transcript %}
+      <div class="chat-message {{ m.role.value }}">
+        {{ m.content }}
+        {% if m.role.value == "assistant" %}
+        <span class="chat-message-meta">{{ m.provider }}/{{ m.model }}</span>
+        {% endif %}
+      </div>
+      {% else %}
+      <p class="empty">Send a message below to start a new conversation.</p>
+      {% endfor %}
+    </div>
+    <form class="chat-composer" id="chat-composer">
+      <textarea id="chat-input" name="message" placeholder="Message..." required></textarea>
+      <button type="submit" class="btn-primary">Send</button>
+    </form>
+  </div>
+</div>
+
+<script>
+(function () {
+  var form = document.getElementById("chat-composer");
+  var input = document.getElementById("chat-input");
+  var thread = document.getElementById("chat-thread");
+  var sessionId = {{ (selected_id | tojson) if selected_id else "null" }};
+  var minQualityTier = {{ default_min_quality_tier | tojson }};
+
+  input.addEventListener("keydown", function (event) {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      form.requestSubmit();
+    }
+  });
+
+  form.addEventListener("submit", function (event) {
+    event.preventDefault();
+    var message = input.value.trim();
+    if (!message) return;
+    input.disabled = true;
+
+    fetch("/chat/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: message,
+        session_id: sessionId,
+        min_quality_tier: minQualityTier,
+      }),
+    })
+      .then(function (response) {
+        if (!response.ok) {
+          return response.json().then(function (body) {
+            throw new Error(body.detail || "request failed");
+          });
+        }
+        return response.json();
+      })
+      .then(function (turn) {
+        window.location.href = "/chat?session_id=" + encodeURIComponent(turn.session_id);
+      })
+      .catch(function (err) {
+        input.disabled = false;
+        var notice = document.createElement("p");
+        notice.className = "chat-error";
+        notice.textContent = err.message;
+        thread.appendChild(notice);
+        thread.scrollTop = thread.scrollHeight;
+      });
+  });
+
+  thread.scrollTop = thread.scrollHeight;
+})();
+</script>
+{% endblock %}

@@ -419,6 +419,30 @@
   td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; font-family: var(--mono); }
   .empty { color: var(--ink-dim); font-style: italic; padding: 1rem 0.75rem; }
 
+  /* --- chat (/chat) -- the one page that's genuinely a live conversation
+     rather than a monitoring view. Layout follows /settings' existing
+     precedent for the mutating half (vanilla JS fetch(), redirect on
+     success), everything else reuses .table-wrap-adjacent surface/border/
+     radius tokens rather than inventing a new visual language. */
+  .chat-layout { display: grid; grid-template-columns: minmax(180px, 240px) 1fr; gap: 1.25rem; align-items: start; }
+  .chat-sidebar { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  .chat-new { display: block; padding: 0.65rem 0.9rem; font: inherit; font-size: 13px; font-weight: 700; color: var(--accent-ink); background: var(--accent); text-align: center; text-decoration: none; }
+  .chat-new:hover { filter: brightness(1.08); }
+  .chat-session-link { display: block; padding: 0.6rem 0.9rem; border-top: 1px solid var(--line); color: var(--ink); text-decoration: none; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chat-session-link:hover { background: color-mix(in srgb, var(--ink) 3%, transparent); }
+  .chat-session-link.active { background: var(--surface-2); box-shadow: inset 3px 0 0 var(--accent); font-weight: 700; }
+  .chat-session-time { display: block; color: var(--ink-dim); font-family: var(--mono); font-size: 11px; margin-top: 0.15rem; }
+  .chat-main { display: flex; flex-direction: column; gap: 0.85rem; min-height: 60vh; }
+  .chat-thread { flex: 1; display: flex; flex-direction: column; gap: 0.65rem; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 1rem; overflow-y: auto; max-height: 60vh; }
+  .chat-message { max-width: 72ch; padding: 0.55rem 0.85rem; border-radius: var(--radius); font-size: 14px; line-height: 1.5; white-space: pre-wrap; }
+  .chat-message.user { align-self: flex-end; background: color-mix(in srgb, var(--accent) 16%, var(--surface)); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); }
+  .chat-message.assistant { align-self: flex-start; background: var(--surface-2); border: 1px solid var(--line); }
+  .chat-message-meta { display: block; margin-top: 0.35rem; color: var(--ink-dim); font-family: var(--mono); font-size: 11px; }
+  .chat-composer { display: flex; gap: 0.6rem; align-items: flex-end; }
+  .chat-composer textarea { flex: 1; resize: vertical; min-height: 2.6rem; max-height: 10rem; padding: 0.55rem 0.75rem; font: inherit; font-size: 14px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+  .chat-composer textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .chat-error { background: color-mix(in srgb, var(--danger) 14%, transparent); border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent); color: var(--danger); border-radius: var(--radius); padding: 0.6rem 0.9rem; margin-bottom: 1.1rem; font-size: 13px; }
+
   /* --- charts (bars, paired bars, sparklines) -- see static/charts.js.
      Colors reference the same custom properties as everything else, so a
      theme toggle re-themes an already-rendered chart for free (no JS
@@ -502,6 +526,7 @@
   <a href="/" class="{{ 'active' if active == 'overview' }}">Overview</a>
   <div class="nav-group">
     <span class="nav-group-label">Execution</span>
+    <a href="/chat" class="{{ 'active' if active == 'chat' }}">Chat</a>
     <a href="/tasks" class="{{ 'active' if active == 'tasks' }}">Tasks</a>
     <a href="/agents" class="{{ 'active' if active == 'agents' }}">Agents</a>
   </div>

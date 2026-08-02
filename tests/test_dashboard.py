@@ -684,3 +684,106 @@ async def test_settings_saved_banner_shown_after_redirect(migrated_settings: Set
 
     assert response.status_code == 200
     assert "Settings saved" in response.text
+
+
+async def test_chat_page_shows_empty_state_with_no_sessions(migrated_settings: Settings) -> None:
+    response = _client(migrated_settings).get("/chat")
+
+    assert response.status_code == 200
+    assert "No chat sessions yet." in response.text
+    assert "Send a message below to start a new conversation." in response.text
+
+
+async def test_chat_send_starts_a_new_session_and_the_page_shows_it(
+    migrated_settings: Settings,
+) -> None:
+    client = _client(migrated_settings)
+
+    send_response = client.post("/chat/send", json={"message": "hello there"})
+    assert send_response.status_code == 200
+    body = send_response.json()
+    assert body["provider"] == "mock"
+    assert "[mock:" in body["reply"]
+
+    page_response = client.get("/chat", params={"session_id": body["session_id"]})
+    assert page_response.status_code == 200
+    assert "hello there" in page_response.text
+    assert "[mock:" in page_response.text
+    assert "mock/mock-echo-1" in page_response.text
+
+
+async def test_chat_page_auto_selects_the_most_recently_active_session(
+    migrated_settings: Settings,
+) -> None:
+    client = _client(migrated_settings)
+    client.post("/chat/send", json={"message": "first session"})
+    second = client.post("/chat/send", json={"message": "second session"}).json()
+
+    response = client.get("/chat")
+
+    assert response.status_code == 200
+    # Both titles legitimately appear in the sidebar -- scope the check to
+    # the transcript panel itself, which must show the SECOND (most
+    # recently active) session's message, not the first one.
+    transcript_html = response.text.split('id="chat-thread"')[1].split("</form>")[0]
+    assert "second session" in transcript_html
+    assert "first session" not in transcript_html
+    assert second["session_id"] in response.text
+
+
+async def test_chat_page_reports_unknown_session_cleanly(migrated_settings: Settings) -> None:
+    response = _client(migrated_settings).get("/chat", params={"session_id": "does-not-exist"})
+
+    assert response.status_code == 200
+    assert "no chat session" in response.text
+
+
+async def test_chat_send_resumes_an_existing_session(migrated_settings: Settings) -> None:
+    client = _client(migrated_settings)
+    first = client.post("/chat/send", json={"message": "first"}).json()
+
+    second = client.post(
+        "/chat/send", json={"message": "second", "session_id": first["session_id"]}
+    )
+
+    assert second.status_code == 200
+    assert second.json()["session_id"] == first["session_id"]
+
+
+async def test_chat_send_reports_unknown_session_as_404(migrated_settings: Settings) -> None:
+    response = _client(migrated_settings).post(
+        "/chat/send", json={"message": "hi", "session_id": "does-not-exist"}
+    )
+
+    assert response.status_code == 404
+    assert "no chat session" in response.json()["detail"]
+
+
+async def test_chat_send_reports_no_provider_available_as_503(migrated_settings: Settings) -> None:
+    response = _client(migrated_settings).post(
+        "/chat/send", json={"message": "hi", "min_quality_tier": 5}
+    )
+
+    assert response.status_code == 503
+
+
+async def test_chat_send_rejects_a_cross_origin_request(migrated_settings: Settings) -> None:
+    response = _client(migrated_settings).post(
+        "/chat/send",
+        json={"message": "hi"},
+        headers={"origin": "https://evil.example"},
+    )
+
+    assert response.status_code == 403
+
+
+async def test_chat_send_allows_a_same_origin_request(migrated_settings: Settings) -> None:
+    client = _client(migrated_settings)
+
+    response = client.post(
+        "/chat/send",
+        json={"message": "hi"},
+        headers={"origin": str(client.base_url)},
+    )
+
+    assert response.status_code == 200

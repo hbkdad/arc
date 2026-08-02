@@ -29,6 +29,10 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from acr.agents.topology import AgentTopologyRecord
+from acr.chat.engine import ChatSessionNotFoundError
+from acr.chat.engine import get_transcript as chat_get_transcript
+from acr.chat.engine import list_sessions as chat_list_sessions
+from acr.chat.engine import send_message as chat_send_message
 from acr.config import Settings, get_settings
 from acr.dashboard import queries
 from acr.db.base import make_engine, make_session_factory
@@ -37,8 +41,10 @@ from acr.env_config import ensure_env_file, set_var
 from acr.evaluation.calibration import compute_calibration
 from acr.learning.proposals import ProposalStatus, list_proposals
 from acr.routing.factory import build_default_router
+from acr.routing.models import NoProviderAvailableError
 from acr.security.audit import recent_audit_events
 from acr.skills.registry import list_skills
+from acr.telemetry.recorder import TelemetryRecorder
 from acr.telemetry.usage import ProviderUsage, usage_by_provider
 from acr.tools.default_tools import build_default_registry
 
@@ -164,6 +170,14 @@ def _topology_graph(
         for (tc, name), agg in sorted(model_weights.items())
     ]
     return task_classes, skills, models, edges
+
+
+class ChatSendRequest(BaseModel):
+    """POST body for `/chat/send`."""
+
+    message: str
+    session_id: str | None = None
+    min_quality_tier: int | None = None
 
 
 class SettingsUpdate(BaseModel):
@@ -431,6 +445,81 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             settings.default_min_quality_tier = 2
         get_settings.cache_clear()
         return {"saved": True}
+
+    @app.get("/chat", response_class=HTMLResponse)
+    async def chat_page(
+        request: Request,
+        session: AsyncSession = Depends(get_session),
+        session_id: str | None = None,
+    ) -> HTMLResponse:
+        sessions = await chat_list_sessions(session)
+        selected_id = session_id
+        error: str | None = None
+        transcript: list[Any] = []
+        if selected_id is None and sessions:
+            selected_id = sessions[0].id
+        if selected_id is not None:
+            try:
+                transcript = await chat_get_transcript(session, selected_id)
+            except ChatSessionNotFoundError:
+                error = f"no chat session with id {selected_id!r}"
+                selected_id = None
+        return templates.TemplateResponse(
+            request,
+            "chat.html",
+            {
+                "active": "chat",
+                "sessions": sessions,
+                "selected_id": selected_id,
+                "transcript": transcript,
+                "error": error,
+                "default_min_quality_tier": settings.default_min_quality_tier,
+            },
+        )
+
+    @app.post("/chat/send")
+    async def chat_send(
+        request: Request,
+        body: ChatSendRequest,
+        session: AsyncSession = Depends(get_session),
+    ) -> dict[str, Any]:
+        """Same CSRF Origin check as `/settings` -- this route mutates real
+        state and, at a raised quality tier, spends real money on a
+        configured provider, so a cross-origin auto-submitted request is
+        exactly as unacceptable here as it is there."""
+        origin = request.headers.get("origin")
+        if (
+            origin is not None
+            and origin.rstrip("/") != f"{request.url.scheme}://{request.url.netloc}"
+        ):
+            raise HTTPException(status_code=403, detail="cross-origin request rejected")
+
+        router = build_default_router(settings)
+        resolved_tier = (
+            body.min_quality_tier
+            if body.min_quality_tier is not None
+            else settings.default_min_quality_tier
+        )
+        try:
+            turn = await chat_send_message(
+                session,
+                router,
+                TelemetryRecorder(),
+                body.message,
+                chat_session_id=body.session_id,
+                min_quality_tier=resolved_tier,
+            )
+        except ChatSessionNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except NoProviderAvailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+        return {
+            "session_id": turn.session_id,
+            "reply": turn.reply,
+            "provider": turn.provider,
+            "model": turn.model,
+        }
 
     @app.get("/visualization", response_class=HTMLResponse)
     async def visualization(request: Request) -> HTMLResponse:

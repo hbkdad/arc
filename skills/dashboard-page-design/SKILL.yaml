@@ -1,0 +1,28 @@
+id: dashboard-page-design
+name: New Dashboard Page Layout and Interaction Design
+version: "1.0.0"
+description: Propose a concrete layout and interaction design (structure, components, mutation pattern) for a NEW page in ACR's server-rendered, token-based operational dashboard.
+task_classes:
+  - ui-layout-generation
+  - dashboard-page-design
+inputs:
+  target: string
+outputs:
+  design_direction: string
+dependencies: []
+permissions: []
+tools: []
+models: []
+token_estimate: 420
+applicability: Use when asked to design the layout, components, and interaction pattern for a NEW page being added to ACR's dashboard -- distinct from dashboard-design-elaborate, which proposes color/typography *theme* tokens for the existing pages, not a new page's structure.
+contraindications: Do not use for color palette or typography theme proposals (see dashboard-design-elaborate), and do not use for anything outside the dashboard's own server-rendered Jinja2 + CSS-custom-property system.
+verification: >
+  The proposal must describe concrete page regions (not vague "make it nice"
+  language), name which existing dashboard CSS patterns it reuses (e.g.
+  .table-wrap, .settings-card, .metric-grid, .pill) versus what's genuinely
+  new, state whether mutations use a full page reload/redirect or
+  client-side fetch(), and stay consistent with the dashboard's stated
+  philosophy -- server-rendered HTML first, JavaScript only where a page
+  genuinely needs live interaction, no SPA framework.
+origin: manual
+author: acr-team

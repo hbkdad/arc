@@ -2603,6 +2603,66 @@ generate the per-provider outcome data to make that evidence-based
 instead of guessed, the same pattern `ROUTING_OPTIMIZATION` proposals
 already use.
 
+## `acr chat` in the dashboard, designed via a real Ollama trajectory run (2026-08-01)
+
+Asked directly to also build chat into the dashboard, and to route the
+*design* of the page through ACR's own skill/trajectory machinery rather
+than hand-designed from scratch — the same real-Ollama-trial-and-error
+approach that produced the Observatory theme.
+
+**New skill, `dashboard-page-design`** — distinct from
+`dashboard-design-elaborate` (color/typography *theme* tokens for
+existing pages): this one's applicability is proposing layout and
+interaction design for a brand-new page. Registered, activated, run for
+real via `run_skill_trajectory()` against a local Ollama model
+(`qwen2.5-coder:1.5b`) with the objective "design the /chat page."
+
+**Both real attempts timed out at 300s** (`OllamaProvider`'s configured
+`_COMPLETION_TIMEOUT_SECONDS`) — once with a full structured-proposal
+ask, once with a much shorter "under 150 words" ask. Real evidence, not
+a bug: this skill's prepended instructions plus a substantive generative
+task exceeds what this specific small model can finish on this hardware
+within ACR's configured limit, even though short conversational
+exchanges (`acr chat send "hello"`) complete in seconds on the same
+setup. Reported honestly rather than fabricating a design rationale
+after the fact — the two real `Task` records (both `FAILED`, real
+telemetry, real 301.7s durations) are queryable via `acr explain` like
+any other task. The page below was designed directly from the skill's
+own instructions by hand, since the trial didn't produce usable output;
+the skill and the real attempt remain in place for a bigger local model
+or a cloud tier to actually complete.
+
+**The page itself**: `/chat`, `chat.html` — two-column layout (`.chat-
+sidebar`: session list, most-recently-active first, a "+ New chat" link;
+`.chat-main`: `.chat-thread` message bubbles + `.chat-composer`), reusing
+the existing token system throughout (no new colors, only new structural
+classes). Mutation (`POST /chat/send`) follows `/settings`' exact
+precedent: vanilla JS `fetch()` with a JSON body, the same CSRF
+Origin-header check, redirect to a GET URL on success — deliberately not
+a live-DOM-patching SPA pattern, matching the dashboard's stated "no JS
+framework" philosophy. Backed entirely by the already-tested
+`acr.chat.engine` functions; no new business logic in the route handlers.
+
+**A real concurrency bug, found by testing this for real, fixed within
+scope.** Verifying the live page (two slow local-model calls in flight
+at once — the trajectory retry plus a live browser send) reproduced
+`sqlite3.OperationalError: database is locked`: `send_message()` flushed
+the user's message but didn't commit until after the (slow) provider
+call returned, holding SQLite/WAL's single writer lock for the entire
+call — any concurrent writer blocks for `busy_timeout` (30s) then fails,
+far short of a slow model's real completion time. Fixed by committing
+immediately after the user message is written, before the provider call,
+so the lock is only held for brief inserts. `core.execution.run_task()`
+has the identical shape and wasn't touched here (out of scope for a
+dashboard feature) — flagged as its own follow-up task rather than
+silently left for someone to rediscover.
+
+Tests: 9 new dashboard tests (`tests/test_dashboard.py`) covering the
+empty state, session auto-selection, resuming a session, the unknown-
+session error path (both GET and POST), the 503 no-provider-available
+path, and the CSRF Origin check — all against the deterministic mock
+provider, no live Ollama dependency in CI.
+
 ## What's left
 
 Every phase in the master spec's 15-phase list (§65-66) now has a

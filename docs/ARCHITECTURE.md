@@ -2663,6 +2663,51 @@ session error path (both GET and POST), the 503 no-provider-available
 path, and the CSRF Origin check — all against the deterministic mock
 provider, no live Ollama dependency in CI.
 
+## `/chat` reported broken: two real bugs found live, one hardware reality (2026-08-01)
+
+A live report ("chat not working, won't send my prompt") led to real
+diagnosis rather than guessing — a diagnostic dashboard instance on a
+second port against the same data dir gave log/traceback visibility the
+user's own already-running process didn't expose to this session.
+Reproducing against the real session showed the actual sequence: the
+same message sent nine times in a row, then a genuine client-side crash.
+
+**Bug 1 — no send feedback, so the composer looked dead.** The composer
+disabled the textbox on submit with zero other indication anything was
+happening. On a slow local model (confirmed again here: history-heavy
+turns in a long-running session took minutes, matching the earlier
+300s-timeout finding), a silent multi-minute wait is indistinguishable
+from broken — which is exactly what drove the repeated Send clicks.
+Fixed: the user's message and a pulsing "waiting for a reply" bubble now
+appear immediately, before the network call resolves, and the button
+reads "Sending..." and disables until it settles
+(`prefers-reduced-motion` respected on the pulse).
+
+**Bug 2 — a real provider failure crashed the error handler too.**
+`chat_send()`'s route only caught `ChatSessionNotFoundError` and
+`NoProviderAvailableError`; any other failure from the provider call
+(`send_message()` already records it as real `model.call.failed`
+telemetry before re-raising) propagated as an unhandled-exception 500
+whose body is plain text ("Internal Server Error"), not JSON. The
+composer's own error handling called `response.json()` unconditionally
+on a failed response, so a real backend failure produced a second,
+more confusing client-side parse error on top of the first. Fixed on
+both sides: the route now catches the general case and returns a clean
+`502` with a real JSON `{"detail": "..."}` body, and the composer's
+error handling degrades gracefully even if a future failure mode still
+isn't JSON. New regression test
+(`test_chat_send_reports_a_provider_failure_as_a_clean_json_502`) with a
+provider that always raises.
+
+**Not a bug — a data hygiene mistake made during diagnosis.** Several of
+the diagnostic requests reused the user's own real session id (the
+fastest way to reproduce against their exact data), which mixed
+`MockProvider`-echoed text (`"[mock:N chars] ..."`) into that session's
+real history. A later real Ollama reply in the same session visibly
+echoed that artifact back — a small model pattern-matching a confusing
+context, not a new bug. Disclosed directly rather than silently left for
+the user to notice; starting a fresh session avoids replaying it.
+
 ## What's left
 
 Every phase in the master spec's 15-phase list (§65-66) now has a

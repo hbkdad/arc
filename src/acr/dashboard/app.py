@@ -513,6 +513,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except NoProviderAvailableError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except Exception as exc:
+            # The provider call itself can fail in ways neither of the two
+            # cases above cover (a real Ollama/cloud network error, a
+            # non-2xx response, a timeout) -- `send_message()` already
+            # records this as `model.call.failed` telemetry before
+            # re-raising, so nothing is lost by turning it into a clean
+            # response here. Left uncaught, this became an unhandled-
+            # exception 500 whose body is plain text ("Internal Server
+            # Error"), not JSON -- which the composer's error handling
+            # can't parse either, compounding a real failure into a
+            # second, more confusing one client-side.
+            raise HTTPException(status_code=502, detail=f"chat send failed: {exc}") from exc
 
         return {
             "session_id": turn.session_id,

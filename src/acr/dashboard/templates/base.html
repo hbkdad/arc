@@ -438,7 +438,11 @@
   .chat-message.user { align-self: flex-end; background: color-mix(in srgb, var(--accent) 16%, var(--surface)); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); }
   .chat-message.assistant { align-self: flex-start; background: var(--surface-2); border: 1px solid var(--line); }
   .chat-message-meta { display: block; margin-top: 0.35rem; color: var(--ink-dim); font-family: var(--mono); font-size: 11px; }
+  .chat-message.chat-pending { color: var(--ink-dim); font-style: italic; animation: chat-pending-pulse 1.6s ease-in-out infinite; }
+  @keyframes chat-pending-pulse { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) { .chat-message.chat-pending { animation: none; opacity: 0.75; } }
   .chat-composer { display: flex; gap: 0.6rem; align-items: flex-end; }
+  .chat-composer button:disabled { opacity: 0.6; cursor: not-allowed; }
   .chat-composer textarea { flex: 1; resize: vertical; min-height: 2.6rem; max-height: 10rem; padding: 0.55rem 0.75rem; font: inherit; font-size: 14px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
   .chat-composer textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .chat-error { background: color-mix(in srgb, var(--danger) 14%, transparent); border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent); color: var(--danger); border-radius: var(--radius); padding: 0.6rem 0.9rem; margin-bottom: 1.1rem; font-size: 13px; }

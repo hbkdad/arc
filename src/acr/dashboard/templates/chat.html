@@ -35,7 +35,7 @@
     </div>
     <form class="chat-composer" id="chat-composer">
       <textarea id="chat-input" name="message" placeholder="Message..." required></textarea>
-      <button type="submit" class="btn-primary">Send</button>
+      <button type="submit" class="btn-primary" id="chat-send">Send</button>
     </form>
   </div>
 </div>
@@ -44,6 +44,7 @@
 (function () {
   var form = document.getElementById("chat-composer");
   var input = document.getElementById("chat-input");
+  var sendButton = document.getElementById("chat-send");
   var thread = document.getElementById("chat-thread");
   var sessionId = {{ (selected_id | tojson) if selected_id else "null" }};
   var minQualityTier = {{ default_min_quality_tier | tojson }};
@@ -55,11 +56,41 @@
     }
   });
 
+  function appendMessage(className, text) {
+    var el = document.createElement("div");
+    el.className = className;
+    el.textContent = text;
+    thread.appendChild(el);
+    thread.scrollTop = thread.scrollHeight;
+    return el;
+  }
+
+  function removeEmptyState() {
+    var empty = thread.querySelector("p.empty");
+    if (empty) empty.remove();
+  }
+
   form.addEventListener("submit", function (event) {
     event.preventDefault();
     var message = input.value.trim();
     if (!message) return;
+
+    // Local model calls can take anywhere from a few seconds to several
+    // minutes (verified for real: a longer prompt hit ACR's own 300s
+    // Ollama timeout) -- a silently-disabled textbox with no other
+    // feedback for that long is indistinguishable from "broken." Show the
+    // user's own message and a pending indicator immediately, before the
+    // network call even resolves.
     input.disabled = true;
+    sendButton.disabled = true;
+    sendButton.textContent = "Sending...";
+    removeEmptyState();
+    appendMessage("chat-message user", message);
+    var pending = appendMessage(
+      "chat-message assistant chat-pending",
+      "Waiting for a reply -- this can take a while on a local model..."
+    );
+    input.value = "";
 
     fetch("/chat/send", {
       method: "POST",
@@ -72,9 +103,18 @@
     })
       .then(function (response) {
         if (!response.ok) {
-          return response.json().then(function (body) {
-            throw new Error(body.detail || "request failed");
-          });
+          // The server always returns a JSON {detail: "..."} error body now,
+          // but degrade gracefully instead of throwing a second, more
+          // confusing parse error if a future failure mode ever doesn't
+          // (a proxy's own error page, a truly unhandled crash).
+          return response
+            .json()
+            .catch(function () {
+              return { detail: response.statusText || "request failed" };
+            })
+            .then(function (body) {
+              throw new Error(body.detail || "request failed");
+            });
         }
         return response.json();
       })
@@ -83,11 +123,10 @@
       })
       .catch(function (err) {
         input.disabled = false;
-        var notice = document.createElement("p");
-        notice.className = "chat-error";
-        notice.textContent = err.message;
-        thread.appendChild(notice);
-        thread.scrollTop = thread.scrollHeight;
+        sendButton.disabled = false;
+        sendButton.textContent = "Send";
+        pending.remove();
+        appendMessage("chat-error", err.message);
       });
   });
 

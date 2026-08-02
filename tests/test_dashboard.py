@@ -17,7 +17,9 @@ from acr.dashboard.app import _pill_class, create_app
 from acr.evaluation.evaluators import ExactMatchEvaluator
 from acr.memory import MemoryCandidate, MemoryScope, MemoryType
 from acr.memory.write_controller import remember
+from acr.providers.base import CompletionRequest, CompletionResult, ModelProvider
 from acr.providers.mock import MockProvider
+from acr.routing.models import ModelProfile, ModelRouter
 from acr.security.audit import record_audit_event
 from acr.skills.registry import register
 from acr.telemetry.recorder import TelemetryRecorder
@@ -765,6 +767,45 @@ async def test_chat_send_reports_no_provider_available_as_503(migrated_settings:
     )
 
     assert response.status_code == 503
+
+
+async def test_chat_send_reports_a_provider_failure_as_a_clean_json_502(
+    migrated_settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A real bug report: a provider failure other than "no provider
+    # available" (a real Ollama network error, a timeout) previously
+    # propagated as an unhandled-exception 500 whose body is plain text
+    # ("Internal Server Error"), not JSON -- which broke the composer's
+    # own error handling too, turning one real failure into a second,
+    # more confusing client-side crash. Reproduced here with a provider
+    # that always raises.
+    class _AlwaysFailsProvider(ModelProvider):
+        name = "always-fails"
+
+        async def is_available(self) -> bool:
+            return True
+
+        async def complete(self, request: CompletionRequest) -> CompletionResult:
+            raise RuntimeError("simulated provider failure")
+
+    def _failing_router(_settings: Settings) -> ModelRouter:
+        return ModelRouter(
+            [
+                ModelProfile(
+                    provider=_AlwaysFailsProvider(),
+                    name="always-fails",
+                    cost_per_1k_tokens=0.0,
+                    quality_tier=0,
+                )
+            ]
+        )
+
+    monkeypatch.setattr("acr.dashboard.app.build_default_router", _failing_router)
+
+    response = _client(migrated_settings).post("/chat/send", json={"message": "hi"})
+
+    assert response.status_code == 502
+    assert "simulated provider failure" in response.json()["detail"]
 
 
 async def test_chat_send_rejects_a_cross_origin_request(migrated_settings: Settings) -> None:
